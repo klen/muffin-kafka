@@ -1,7 +1,7 @@
 from asyncio import Task, gather
 from collections import defaultdict
 from collections.abc import Awaitable
-from typing import Any, Callable, ClassVar, Coroutine, List, Tuple, TypedDict, cast
+from typing import Any, Callable, ClassVar, Coroutine, List, Optional, Tuple, TypedDict, cast
 
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer, helpers
 from aiokafka.client import create_task
@@ -16,15 +16,15 @@ class Options(TypedDict):
     bootstrap_servers: str
     client_id: str
     enable_auto_commit: bool
-    group_id: str | None
-    max_poll_records: int | None
+    group_id: Optional[str]
+    max_poll_records: Optional[int]
     request_timeout_ms: int
     retry_backoff_ms: int
     sasl_mechanism: str
-    sasl_plain_password: str | None
-    sasl_plain_username: str | None
+    sasl_plain_password: Optional[str]
+    sasl_plain_username: Optional[str]
     security_protocol: str
-    ssl_cafile: str | None
+    ssl_cafile: Optional[str]
     produce: bool
     auto_connect: bool
 
