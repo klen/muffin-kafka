@@ -3,8 +3,8 @@
 **Muffin-Kafka** – [Apache Kafka](https://kafka.apache.org) integration for [Muffin](https://klen.github.io/muffin) framework
 
 [![Tests Status](https://github.com/klen/muffin-kafka/workflows/tests/badge.svg)](https://github.com/klen/muffin-kafka/actions)
-[![PYPI Version](https://img.shields.io/pypi/v/muffin-kafka//pypi.org/project/muffin-kafka/)
-[![Python Versions](https://img.shields.io/pypi/pyversions/muffin-kafka//pypi.org/project/muffin-kafka/)
+[![PYPI Version](https://img.shields.io/pypi/v/muffin-kafka)](https://pypi.org/project/muffin-kafka/)
+[![Python Versions](https://img.shields.io/pypi/pyversions/muffin-kafka)](https://pypi.org/project/muffin-kafka/)
 
 ## Requirements
 
