@@ -32,11 +32,11 @@ release:
 	@poetry version $(VPART)
 	@git commit -am "build(release): version: `poetry version -s`"
 	@git tag `poetry version -s`
-	@git checkout master
+	@git checkout main
 	@git pull
 	@git merge develop
 	@git checkout develop
-	@git push --tags origin develop master
+	@git push --tags origin develop main
 
 .PHONY: minor
 minor: release
