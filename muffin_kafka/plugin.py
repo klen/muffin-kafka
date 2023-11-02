@@ -67,7 +67,7 @@ class KafkaPlugin(BasePlugin):
         logger.info("Kafka: Starting plugin")
 
         if self.cfg.auto_connect:
-            await self.__connect__()
+            await self.connect()
 
     async def shutdown(self):
         self.app.logger.info("Stopping Kafka plugin")
@@ -103,7 +103,7 @@ class KafkaPlugin(BasePlugin):
         self.error_handler = fn
         return fn
 
-    async def __connect__(self):
+    async def connect(self, only: Tuple[str, ...] = ()):
         cfg = self.cfg
         params = {
             "auto_offset_reset": cfg.auto_offset_reset,
@@ -128,7 +128,8 @@ class KafkaPlugin(BasePlugin):
 
         for topics, fn in self.handlers:
             logger.info("Kafka: Listen to %r", topics)
-            for topic in topics:
+            filtered = [t for t in topics if t in only] if only else topics
+            for topic in filtered:
                 if topic not in self.consumers:
                     consumer = self.consumers[topic] = AIOKafkaConsumer(topic, **params)
                     await consumer.start()
