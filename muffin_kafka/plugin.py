@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from asyncio import Task, gather
 from collections import defaultdict
 from collections.abc import Awaitable
@@ -9,6 +11,7 @@ from asgi_tools._compat import json_dumps
 from muffin.plugins import BasePlugin
 
 TCallable = Callable[..., Awaitable[Any]]
+TErrCallable = Callable[[BaseException], Awaitable[Any]]
 
 
 class Options(TypedDict):
@@ -94,14 +97,11 @@ class KafkaPlugin(BasePlugin):
 
         return wrapper
 
-    def handle_error(self, err: BaseException) -> Callable[[TCallable], TCallable]:
+    def handle_error(self, fn: TErrCallable) -> TErrCallable:
         """Register a handler for Kafka errors."""
 
-        def wrapper(fn):
-            self.error_handler = fn
-            return fn
-
-        return wrapper
+        self.error_handler = fn
+        return fn
 
     async def __connect__(self):
         cfg = self.cfg
@@ -136,8 +136,7 @@ class KafkaPlugin(BasePlugin):
                     self.consumers.append(consumer)
                     await consumer.start()
 
-                for topic in topics:
-                    self.map[topic].append(fn)
+                self.map[topic].append(fn)
 
         self.tasks = [create_task(self.__process__(consumer)) for consumer in self.consumers]
 
@@ -149,8 +148,8 @@ class KafkaPlugin(BasePlugin):
             for fn in self.map[msg.topic]:
                 try:
                     await fn(msg)
-                except Exception as exc:  # noqa: BLE001
-                    logger.error("Kafka: Error while processing message: %s", exc)
+                except Exception as exc:  # noqa: PERF203
+                    logger.exception("Kafka: Error while processing message: %s", exc)
                     error_handler = cast(TCallable, self.error_handler)
                     if error_handler:
                         await error_handler(exc)
