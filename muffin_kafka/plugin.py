@@ -3,7 +3,7 @@ from __future__ import annotations
 from asyncio import Task, gather
 from collections import defaultdict
 from collections.abc import Awaitable
-from typing import Any, Callable, ClassVar, Coroutine, List, Optional, Tuple, TypedDict, cast
+from typing import Any, Callable, ClassVar, Coroutine, Dict, List, Optional, Tuple, TypedDict, cast
 
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer, helpers
 from aiokafka.client import create_task
@@ -53,7 +53,7 @@ class KafkaPlugin(BasePlugin):
     }
 
     producer: AIOKafkaProducer
-    consumers: ClassVar[List[AIOKafkaConsumer]] = []
+    consumers: ClassVar[Dict[str, AIOKafkaConsumer]] = {}
     handlers: ClassVar[List[Tuple[Tuple[str, ...], Callable[..., Coroutine]]]] = []
 
     def __init__(self, *args, **kwargs):
@@ -75,7 +75,7 @@ class KafkaPlugin(BasePlugin):
             task.cancel()
 
         if self.cfg.auto_connect:
-            await gather(*[consumer.stop() for consumer in self.consumers])
+            await gather(*[consumer.stop() for consumer in self.consumers.values()])
 
     async def send(self, topic: str, value: Any):
         """Send a message to Kafka."""
@@ -126,14 +126,11 @@ class KafkaPlugin(BasePlugin):
         logger.info("Kafka: Connecting to %s", self.cfg.bootstrap_servers)
         logger.info("Kafka: Params %r", params)
 
-        consumers = {}
-
         for topics, fn in self.handlers:
             logger.info("Kafka: Listen to %r", topics)
             for topic in topics:
-                if topic not in consumers:
-                    consumer = consumers[topic] = AIOKafkaConsumer(topic, **params)
-                    self.consumers.append(consumer)
+                if topic not in self.consumers:
+                    consumer = self.consumers[topic] = AIOKafkaConsumer(topic, **params)
                     await consumer.start()
 
                 self.map[topic].append(fn)
