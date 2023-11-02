@@ -103,7 +103,7 @@ class KafkaPlugin(BasePlugin):
         self.error_handler = fn
         return fn
 
-    async def connect(self, only: Tuple[str, ...] = ()):
+    async def connect(self, *only: str):
         cfg = self.cfg
         params = {
             "auto_offset_reset": cfg.auto_offset_reset,
