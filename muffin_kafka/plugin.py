@@ -127,10 +127,10 @@ class KafkaPlugin(BasePlugin):
         logger.info("Kafka: Params %r", params)
 
         for topics, fn in self.handlers:
-            logger.info("Kafka: Listen to %r", topics)
             filtered = [t for t in topics if t in only] if only else topics
             for topic in filtered:
                 if topic not in self.consumers:
+                    logger.info("Kafka: Listen to %s", topic)
                     consumer = self.consumers[topic] = AIOKafkaConsumer(topic, **params)
                     await consumer.start()
 
