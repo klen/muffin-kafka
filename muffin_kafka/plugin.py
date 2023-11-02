@@ -149,7 +149,7 @@ class KafkaPlugin(BasePlugin):
                 try:
                     await fn(msg)
                 except Exception as exc:  # noqa: PERF203
-                    logger.exception("Kafka: Error while processing message: %s", exc)
+                    logger.exception("Kafka: Error while processing message: %r", msg)
                     error_handler = cast(TCallable, self.error_handler)
                     if error_handler:
                         await error_handler(exc)
