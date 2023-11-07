@@ -8,7 +8,7 @@ from typing import Any, Callable, ClassVar, Coroutine, Dict, List, Optional, Tup
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer, helpers
 from aiokafka.client import create_task
 from asgi_tools._compat import json_dumps
-from muffin.plugins import BasePlugin
+from muffin.plugins import BasePlugin, PluginError
 
 TCallable = Callable[..., Awaitable[Any]]
 TErrCallable = Callable[[BaseException], Awaitable[Any]]
@@ -80,7 +80,7 @@ class KafkaPlugin(BasePlugin):
     async def send(self, topic: str, value: Any):
         """Send a message to Kafka."""
         if not self.cfg.produce:
-            return False
+            raise PluginError("Kafka: Producer is not enabled")
 
         if not isinstance(value, str):
             value = json_dumps(value)
