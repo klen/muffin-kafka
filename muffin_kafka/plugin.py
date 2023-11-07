@@ -85,8 +85,7 @@ class KafkaPlugin(BasePlugin):
         if not isinstance(value, str):
             value = json_dumps(value)
 
-        fut = await self.producer.send(topic, value)
-        return fut
+        return await self.producer.send(topic, value)
 
     def handle_topics(self, *topics: str) -> Callable[[TCallable], TCallable]:
         """Register a handler for Kafka messages."""
