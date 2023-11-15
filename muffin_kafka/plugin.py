@@ -135,9 +135,11 @@ class KafkaPlugin(BasePlugin):
 
                 self.map[topic].append(fn)
 
-        self.tasks = [create_task(self.__process__(consumer)) for consumer in self.consumers]
+        self.tasks = [
+            create_task(self.__process__(consumer)) for consumer in self.consumers.values()
+        ]
 
-    async def __process__(self, consumer):
+    async def __process__(self, consumer: AIOKafkaConsumer):
         logger = self.app.logger
         logger.info("Start listening Kafka messages")
         async for msg in consumer:
