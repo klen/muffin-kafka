@@ -72,9 +72,9 @@ class KafkaPlugin(BasePlugin):
     handlers: ClassVar[List[Tuple[Tuple[str, ...], Callable[..., Coroutine]]]] = []
 
     def __init__(self, app: Optional[Application] = None, **kwargs):
-        self.map = defaultdict(list)
+        self.map: defaultdict = defaultdict(list)
         self.tasks: List[Task] = []
-        self.error_handler = None
+        self.error_handler: Optional[TErrCallable] = None
         super().__init__(app, **kwargs)
 
     async def startup(self):
@@ -164,6 +164,6 @@ class KafkaPlugin(BasePlugin):
                     await fn(msg)
                 except Exception as exc:  # noqa: PERF203
                     logger.exception("Kafka: Error while processing message: %r", msg)
-                    error_handler = cast(Optional[TCallable], self.error_handler)
+                    error_handler = cast(Optional[TErrCallable], self.error_handler)
                     if error_handler:
                         await error_handler(exc)
