@@ -89,7 +89,12 @@ class KafkaPlugin(BasePlugin):
         for task in self.tasks:
             task.cancel()
 
-        if self.cfg.auto_connect:
+        cfg = self.cfg
+
+        if cfg.produce:
+            await self.producer.stop()
+
+        if cfg.auto_connect:
             await gather(*[consumer.stop() for consumer in self.consumers.values()])
 
     async def send(self, topic: str, value: Any):
@@ -153,6 +158,10 @@ class KafkaPlugin(BasePlugin):
         self.tasks = [
             create_task(self.__process__(consumer)) for consumer in self.consumers.values()
         ]
+
+        if cfg.produce:
+            self.producer = AIOKafkaProducer(**params)
+            await self.producer.start()
 
     async def __process__(self, consumer: AIOKafkaConsumer):
         logger = self.app.logger
