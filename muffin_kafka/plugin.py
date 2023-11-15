@@ -8,6 +8,7 @@ from typing import Any, Callable, ClassVar, Coroutine, Dict, List, Optional, Tup
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer, helpers
 from aiokafka.client import create_task
 from asgi_tools._compat import json_dumps
+from muffin.app import Application
 from muffin.plugins import BasePlugin, PluginError
 
 TCallable = Callable[..., Awaitable[Any]]
@@ -56,11 +57,11 @@ class KafkaPlugin(BasePlugin):
     consumers: ClassVar[Dict[str, AIOKafkaConsumer]] = {}
     handlers: ClassVar[List[Tuple[Tuple[str, ...], Callable[..., Coroutine]]]] = []
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, app: Optional[Application] = None, **kwargs):
         self.map = defaultdict(list)
         self.tasks: List[Task] = []
         self.error_handler = None
-        super().__init__(*args, **kwargs)
+        super().__init__(app, **kwargs)
 
     async def startup(self):
         logger = self.app.logger
@@ -149,6 +150,6 @@ class KafkaPlugin(BasePlugin):
                     await fn(msg)
                 except Exception as exc:  # noqa: PERF203
                     logger.exception("Kafka: Error while processing message: %r", msg)
-                    error_handler = cast(TCallable, self.error_handler)
+                    error_handler = cast(Optional[TCallable], self.error_handler)
                     if error_handler:
                         await error_handler(exc)
