@@ -3,16 +3,30 @@ from __future__ import annotations
 from asyncio import Task, gather
 from collections import defaultdict
 from collections.abc import Awaitable
-from typing import Any, Callable, ClassVar, Coroutine, Dict, List, Optional, Tuple, TypedDict, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    ClassVar,
+    Coroutine,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    TypedDict,
+    cast,
+)
 
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer, helpers
 from aiokafka.client import create_task
 from asgi_tools._compat import json_dumps
-from muffin.app import Application
 from muffin.plugins import BasePlugin, PluginError
 
 TCallable = Callable[..., Awaitable[Any]]
 TErrCallable = Callable[[BaseException], Awaitable[Any]]
+
+if TYPE_CHECKING:
+    from muffin.app import Application
 
 
 class Options(TypedDict):
