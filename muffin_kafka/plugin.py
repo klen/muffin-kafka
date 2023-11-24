@@ -125,12 +125,8 @@ class KafkaPlugin(BasePlugin):
     async def connect(self, *only: str):
         cfg = self.cfg
         params = {
-            "auto_offset_reset": cfg.auto_offset_reset,
             "bootstrap_servers": cfg.bootstrap_servers,
             "client_id": cfg.client_id,
-            "enable_auto_commit": cfg.enable_auto_commit,
-            "group_id": cfg.group_id,
-            "max_poll_records": cfg.max_poll_records,
             "request_timeout_ms": cfg.request_timeout_ms,
             "retry_backoff_ms": cfg.retry_backoff_ms,
             "sasl_mechanism": cfg.sasl_mechanism,
@@ -150,7 +146,14 @@ class KafkaPlugin(BasePlugin):
             for topic in filtered:
                 if topic not in self.consumers:
                     logger.info("Kafka: Listen to %s", topic)
-                    consumer = self.consumers[topic] = AIOKafkaConsumer(topic, **params)
+                    consumer = self.consumers[topic] = AIOKafkaConsumer(
+                        topic,
+                        auto_offset_reset=cfg.auto_offset_reset,
+                        enable_auto_commit=cfg.enable_auto_commit,
+                        group_id=cfg.group_id,
+                        max_poll_records=cfg.max_poll_records,
+                        **params,
+                    )
                     await consumer.start()
 
                 self.map[topic].append(fn)
