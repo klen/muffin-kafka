@@ -61,7 +61,7 @@ class KafkaPlugin(BasePlugin):
         "sasl_mechanism": "PLAIN",
         "sasl_plain_password": None,
         "sasl_plain_username": None,
-        "security_protocol": "SASL_PLAINTEXT",
+        "security_protocol": "PLAINTEXT",
         "ssl_cafile": None,
         "produce": False,
         "auto_connect": True,
