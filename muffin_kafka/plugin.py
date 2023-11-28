@@ -102,9 +102,7 @@ class KafkaPlugin(BasePlugin):
         if not self.cfg.produce:
             raise PluginError("Kafka: Producer is not enabled")
 
-        if not isinstance(value, str):
-            value = json_dumps(value)
-
+        value = value.encode("utf-8") if isinstance(value, str) else json_dumps(value)
         return await self.producer.send(topic, value)
 
     async def send_and_wait(self, topic: str, value: Any):
