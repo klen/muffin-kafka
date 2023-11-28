@@ -107,6 +107,11 @@ class KafkaPlugin(BasePlugin):
 
         return await self.producer.send(topic, value)
 
+    async def send_and_wait(self, topic: str, value: Any):
+        """Send a message to Kafka and wait for result."""
+        fut = await self.send(topic, value)
+        return await fut
+
     def handle_topics(self, *topics: str) -> Callable[[TCallable], TCallable]:
         """Register a handler for Kafka messages."""
 
