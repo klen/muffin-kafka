@@ -44,7 +44,7 @@ class Options(TypedDict):
     security_protocol: str
     ssl_cafile: Optional[str]
     produce: bool
-    auto_connect: bool
+    listen: bool
 
 
 class KafkaPlugin(BasePlugin):
@@ -64,7 +64,7 @@ class KafkaPlugin(BasePlugin):
         "security_protocol": "PLAINTEXT",
         "ssl_cafile": None,
         "produce": False,
-        "auto_connect": True,
+        "listen": True,
     }
 
     producer: AIOKafkaProducer
@@ -80,21 +80,21 @@ class KafkaPlugin(BasePlugin):
     async def startup(self):
         logger = self.app.logger
         logger.info("Kafka: Starting plugin")
-
-        if self.cfg.auto_connect:
-            await self.connect()
+        await self.connect()
 
     async def shutdown(self):
         self.app.logger.info("Stopping Kafka plugin")
         for task in self.tasks:
             task.cancel()
 
+        await gather(*self.tasks, return_exceptions=True)
+
         cfg = self.cfg
 
         if cfg.produce:
             await self.producer.stop()
 
-        if cfg.auto_connect:
+        if cfg.listen:
             await gather(*[consumer.stop() for consumer in self.consumers.values()])
 
     async def send(self, topic: str, value: Any):
@@ -144,26 +144,27 @@ class KafkaPlugin(BasePlugin):
         logger.info("Kafka: Connecting to %s", self.cfg.bootstrap_servers)
         logger.info("Kafka: Params %r", params)
 
-        for topics, fn in self.handlers:
-            filtered = [t for t in topics if t in only] if only else topics
-            for topic in filtered:
-                if topic not in self.consumers:
-                    logger.info("Kafka: Listen to %s", topic)
-                    consumer = self.consumers[topic] = AIOKafkaConsumer(
-                        topic,
-                        auto_offset_reset=cfg.auto_offset_reset,
-                        enable_auto_commit=cfg.enable_auto_commit,
-                        group_id=cfg.group_id,
-                        max_poll_records=cfg.max_poll_records,
-                        **params,
-                    )
-                    await consumer.start()
+        if cfg.listen:
+            for topics, fn in self.handlers:
+                filtered = [t for t in topics if t in only] if only else topics
+                for topic in filtered:
+                    if topic not in self.consumers:
+                        logger.info("Kafka: Listen to %s", topic)
+                        consumer = self.consumers[topic] = AIOKafkaConsumer(
+                            topic,
+                            auto_offset_reset=cfg.auto_offset_reset,
+                            enable_auto_commit=cfg.enable_auto_commit,
+                            group_id=cfg.group_id,
+                            max_poll_records=cfg.max_poll_records,
+                            **params,
+                        )
+                        await consumer.start()
 
-                self.map[topic].append(fn)
+                    self.map[topic].append(fn)
 
-        self.tasks = [
-            create_task(self.__process__(consumer)) for consumer in self.consumers.values()
-        ]
+            self.tasks = [
+                create_task(self.__process__(consumer)) for consumer in self.consumers.values()
+            ]
 
         if cfg.produce:
             self.producer = AIOKafkaProducer(**params)
