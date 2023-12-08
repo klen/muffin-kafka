@@ -168,6 +168,8 @@ class KafkaPlugin(BasePlugin):
             self.tasks = [
                 create_task(self.__process__(consumer)) for consumer in self.consumers.values()
             ]
+            for task in self.tasks:
+                task.add_done_callback(lambda t: t.exception())
 
         if cfg.produce:
             self.producer = AIOKafkaProducer(**params)
@@ -176,13 +178,16 @@ class KafkaPlugin(BasePlugin):
     async def __process__(self, consumer: AIOKafkaConsumer):
         logger = self.app.logger
         logger.info("Start listening Kafka messages")
-        async for msg in consumer:
-            logger.info("Kafka msg: %s-%s-%s", msg.topic, msg.partition, msg.offset)
-            for fn in self.map[msg.topic]:
-                try:
-                    await fn(msg)
-                except Exception as exc:  # noqa: PERF203
-                    logger.exception("Kafka: Error while processing message: %r", msg)
-                    error_handler = cast(Optional[TErrCallable], self.error_handler)
-                    if error_handler:
-                        await error_handler(exc)
+        try:
+            async for msg in consumer:
+                logger.info("Kafka msg: %s-%s-%s", msg.topic, msg.partition, msg.offset)
+                for fn in self.map[msg.topic]:
+                    try:
+                        await fn(msg)
+                    except Exception as exc:  # noqa: PERF203
+                        logger.exception("Kafka: Error while processing message: %r", msg)
+                        error_handler = cast(Optional[TErrCallable], self.error_handler)
+                        if error_handler:
+                            await error_handler(exc)
+        except Exception:
+            logger.exception("Kafka: Error while listening messages")
