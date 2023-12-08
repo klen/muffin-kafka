@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from asyncio import Task, gather
+from asyncio import sleep as aio_sleep
 from collections import defaultdict
 from collections.abc import Awaitable
 from typing import (
@@ -45,6 +46,7 @@ class Options(TypedDict):
     ssl_cafile: Optional[str]
     produce: bool
     listen: bool
+    monitor: int
 
 
 class KafkaPlugin(BasePlugin):
@@ -65,6 +67,7 @@ class KafkaPlugin(BasePlugin):
         "ssl_cafile": None,
         "produce": False,
         "listen": True,
+        "monitor": 0,
     }
 
     producer: AIOKafkaProducer
@@ -175,6 +178,9 @@ class KafkaPlugin(BasePlugin):
             self.producer = AIOKafkaProducer(**params)
             await self.producer.start()
 
+        if cfg.monitor:
+            self.tasks.append(create_task(self.__monitor__()))
+
     async def __process__(self, consumer: AIOKafkaConsumer):
         logger = self.app.logger
         logger.info("Start listening Kafka messages")
@@ -191,3 +197,21 @@ class KafkaPlugin(BasePlugin):
                             await error_handler(exc)
         except Exception:
             logger.exception("Kafka: Error while listening messages")
+
+    async def __monitor__(self):
+        consumers = self.consumers
+        logger = self.app.logger
+        interval = self.cfg.monitor
+
+        while True:
+            for consumer in consumers.values():
+                for partition in sorted(consumer.assignment(), key=lambda p: p.partition):
+                    logger.info(
+                        "%s-%d offset:%s ts:%s",
+                        partition.topic,
+                        partition.partition,
+                        consumer.last_stable_offset(partition),
+                        consumer.last_poll_timestamp(partition),
+                    )
+
+            await aio_sleep(interval)
