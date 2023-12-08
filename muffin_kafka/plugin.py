@@ -97,17 +97,20 @@ class KafkaPlugin(BasePlugin):
         if cfg.listen:
             await gather(*[consumer.stop() for consumer in self.consumers.values()])
 
-    async def send(self, topic: str, value: Any):
+    async def send(self, topic: str, value: Any, key=None, **params):
         """Send a message to Kafka."""
         if not self.cfg.produce:
             raise PluginError("Kafka: Producer is not enabled")
 
-        value = value.encode("utf-8") if isinstance(value, str) else json_dumps(value)
-        return await self.producer.send(topic, value)
+        if key and isinstance(key, str):
+            key = key.encode("utf-8")
 
-    async def send_and_wait(self, topic: str, value: Any):
+        value = value.encode("utf-8") if isinstance(value, str) else json_dumps(value)
+        return await self.producer.send(topic, value, key=key, **params)
+
+    async def send_and_wait(self, topic: str, value: Any, key=None, **params):
         """Send a message to Kafka and wait for result."""
-        fut = await self.send(topic, value)
+        fut = await self.send(topic, value, key, **params)
         return await fut
 
     def handle_topics(self, *topics: str) -> Callable[[TCallable], TCallable]:
