@@ -131,7 +131,11 @@ class KafkaPlugin(BasePlugin):
         self.error_handler = fn
         return fn
 
-    async def connect(self, *only: str):
+    async def connect(
+        self,
+        *only: str,
+        **params,
+    ):
         cfg = self.cfg
         params = {
             "bootstrap_servers": cfg.bootstrap_servers,
@@ -150,7 +154,7 @@ class KafkaPlugin(BasePlugin):
         logger.info("Kafka: Connecting to %s", self.cfg.bootstrap_servers)
         logger.info("Kafka: Params %r", params)
 
-        if cfg.listen:
+        if params.get("listen", cfg.listen):
             for topics, fn in self.handlers:
                 filtered = [t for t in topics if t in only] if only else topics
                 for topic in filtered:
@@ -174,11 +178,11 @@ class KafkaPlugin(BasePlugin):
             for task in self.tasks:
                 task.add_done_callback(lambda t: t.exception())
 
-        if cfg.produce:
+        if params.get("produce", cfg.produce):
             self.producer = AIOKafkaProducer(**params)
             await self.producer.start()
 
-        if cfg.monitor:
+        if params.get("monitor", cfg.monitor):
             self.tasks.append(create_task(self.__monitor__()))
 
     async def __process__(self, consumer: AIOKafkaConsumer):
