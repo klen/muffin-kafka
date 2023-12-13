@@ -155,6 +155,7 @@ class KafkaPlugin(BasePlugin):
         logger.info("Kafka: Params %r", params)
 
         if params.get("listen", cfg.listen):
+            logger.info("Kafka: Setup listeners")
             for topics, fn in self.handlers:
                 filtered = [t for t in topics if t in only] if only else topics
                 for topic in filtered:
@@ -179,10 +180,12 @@ class KafkaPlugin(BasePlugin):
                 task.add_done_callback(lambda t: t.exception())
 
         if params.get("produce", cfg.produce):
+            logger.info("Kafka: Setup producer")
             self.producer = AIOKafkaProducer(**params)
             await self.producer.start()
 
         if params.get("monitor", cfg.monitor):
+            logger.info("Kafka: Setup monitor")
             self.tasks.append(create_task(self.__monitor__()))
 
     async def __process__(self, consumer: AIOKafkaConsumer):
