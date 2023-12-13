@@ -137,7 +137,7 @@ class KafkaPlugin(BasePlugin):
         **params,
     ):
         cfg = self.cfg
-        params = {
+        kafka_params = {
             "bootstrap_servers": cfg.bootstrap_servers,
             "client_id": cfg.client_id,
             "request_timeout_ms": cfg.request_timeout_ms,
@@ -148,11 +148,11 @@ class KafkaPlugin(BasePlugin):
             "security_protocol": cfg.security_protocol,
         }
         if cfg.ssl_cafile:
-            params["ssl_context"] = helpers.create_ssl_context(cafile=cfg.ssl_cafile)
+            kafka_params["ssl_context"] = helpers.create_ssl_context(cafile=cfg.ssl_cafile)
 
         logger = self.app.logger
         logger.info("Kafka: Connecting to %s", self.cfg.bootstrap_servers)
-        logger.info("Kafka: Params %r", params)
+        logger.info("Kafka: Params %r", kafka_params)
 
         if params.get("listen", cfg.listen):
             logger.info("Kafka: Setup listeners")
@@ -167,7 +167,7 @@ class KafkaPlugin(BasePlugin):
                             enable_auto_commit=cfg.enable_auto_commit,
                             group_id=cfg.group_id,
                             max_poll_records=cfg.max_poll_records,
-                            **params,
+                            **kafka_params,
                         )
                         await consumer.start()
 
@@ -181,7 +181,7 @@ class KafkaPlugin(BasePlugin):
 
         if params.get("produce", cfg.produce):
             logger.info("Kafka: Setup producer")
-            self.producer = AIOKafkaProducer(**params)
+            self.producer = AIOKafkaProducer(**kafka_params)
             await self.producer.start()
 
         if params.get("monitor", cfg.monitor):
