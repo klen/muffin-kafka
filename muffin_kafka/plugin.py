@@ -46,7 +46,8 @@ class Options(TypedDict):
     ssl_cafile: Optional[str]
     produce: bool
     listen: bool
-    monitor: int
+    monitor: bool
+    monitor_interval: int
 
 
 class KafkaPlugin(BasePlugin):
@@ -67,7 +68,8 @@ class KafkaPlugin(BasePlugin):
         "ssl_cafile": None,
         "produce": False,
         "listen": True,
-        "monitor": 0,
+        "monitor": False,
+        "monitor_interval": 60,
     }
 
     producer: AIOKafkaProducer
@@ -208,9 +210,9 @@ class KafkaPlugin(BasePlugin):
     async def __monitor__(self):
         consumers = self.consumers
         logger = self.app.logger
-        interval = self.cfg.monitor
+        interval = self.cfg.monitor_interval
 
-        while True:
+        while interval:
             for consumer in consumers.values():
                 for partition in sorted(consumer.assignment(), key=lambda p: p.partition):
                     logger.info(
