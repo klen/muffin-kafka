@@ -96,7 +96,7 @@ class KafkaPlugin(BasePlugin):
 
         cfg = self.cfg
 
-        if cfg.produce:
+        if cfg.produce and self.producer:
             await self.producer.stop()
 
         if cfg.listen:
