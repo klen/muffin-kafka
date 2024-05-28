@@ -23,7 +23,7 @@ classifiers = [
 
 [tool.poetry.dependencies]
 python = "^3.9"
-muffin = "^0.100.1"
+muffin = "^0"
 aiokafka = "*"
 
 [tool.poetry.group.dev.dependencies]
