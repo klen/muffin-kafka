@@ -195,7 +195,7 @@ class KafkaPlugin(BasePlugin):
         logger.info("Start listening Kafka messages")
         try:
             async for msg in consumer:
-                logger.info("Kafka msg: %s-%s-%s", msg.topic, msg.partition, msg.offset)
+                logger.debug("Kafka msg: %s-%s-%s", msg.topic, msg.partition, msg.offset)
                 for fn in self.map[msg.topic]:
                     try:
                         await fn(msg)
