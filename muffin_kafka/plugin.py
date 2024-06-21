@@ -136,19 +136,25 @@ class KafkaPlugin(BasePlugin):
     async def connect(
         self,
         *only: str,
+        listen: None | bool,
+        produce: None | bool,
+        monitor: None | bool,
         **params,
     ):
         cfg = self.cfg
-        kafka_params = {
-            "bootstrap_servers": cfg.bootstrap_servers,
-            "client_id": cfg.client_id,
-            "request_timeout_ms": cfg.request_timeout_ms,
-            "retry_backoff_ms": cfg.retry_backoff_ms,
-            "sasl_mechanism": cfg.sasl_mechanism,
-            "sasl_plain_password": cfg.sasl_plain_password,
-            "sasl_plain_username": cfg.sasl_plain_username,
-            "security_protocol": cfg.security_protocol,
-        }
+        kafka_params = dict(
+            {
+                "bootstrap_servers": cfg.bootstrap_servers,
+                "client_id": cfg.client_id,
+                "request_timeout_ms": cfg.request_timeout_ms,
+                "retry_backoff_ms": cfg.retry_backoff_ms,
+                "sasl_mechanism": cfg.sasl_mechanism,
+                "sasl_plain_password": cfg.sasl_plain_password,
+                "sasl_plain_username": cfg.sasl_plain_username,
+                "security_protocol": cfg.security_protocol,
+            },
+            **params,
+        )
         if cfg.ssl_cafile:
             kafka_params["ssl_context"] = helpers.create_ssl_context(cafile=cfg.ssl_cafile)
 
@@ -156,7 +162,8 @@ class KafkaPlugin(BasePlugin):
         logger.info("Kafka: Connecting to %s", self.cfg.bootstrap_servers)
         logger.info("Kafka: Params %r", kafka_params)
 
-        if params.get("listen", cfg.listen):
+        listen = cfg.listen if listen is None else listen
+        if listen:
             logger.info("Kafka: Setup listeners")
             for topics, fn in self.handlers:
                 filtered = [t for t in topics if t in only] if only else topics
@@ -181,12 +188,14 @@ class KafkaPlugin(BasePlugin):
             for task in self.tasks:
                 task.add_done_callback(lambda t: t.exception())
 
-        if params.get("produce", cfg.produce):
+        produce = cfg.produce if produce is None else produce
+        if produce:
             logger.info("Kafka: Setup producer")
             self.producer = AIOKafkaProducer(**kafka_params)
             await self.producer.start()
 
-        if params.get("monitor", cfg.monitor):
+        monitor = cfg.monitor if monitor is None else monitor
+        if monitor:
             logger.info("Kafka: Setup monitor")
             self.tasks.append(create_task(self.__monitor__()))
 
@@ -216,9 +225,10 @@ class KafkaPlugin(BasePlugin):
             for consumer in consumers.values():
                 for partition in sorted(consumer.assignment(), key=lambda p: p.partition):
                     logger.info(
-                        "%s-%d offset:%s ts:%s",
+                        "%s-%d offset:%s/%s ts:%s",
                         partition.topic,
                         partition.partition,
+                        await consumer.end_offsets(partition),
                         consumer.last_stable_offset(partition),
                         consumer.last_poll_timestamp(partition),
                     )
