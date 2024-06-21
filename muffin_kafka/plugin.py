@@ -223,13 +223,15 @@ class KafkaPlugin(BasePlugin):
 
         while interval:
             for consumer in consumers.values():
-                for partition in sorted(consumer.assignment(), key=lambda p: p.partition):
+                partitions = sorted(consumer.assignment(), key=lambda p: p.partition)
+                offsets = await consumer.end_offsets(partitions)
+                for partition in partitions:
                     logger.info(
                         "%s-%d offset:%s/%s ts:%s",
                         partition.topic,
                         partition.partition,
-                        await consumer.end_offsets(partition),
                         consumer.last_stable_offset(partition),
+                        offsets.get(partition, "-"),
                         consumer.last_poll_timestamp(partition),
                     )
 
