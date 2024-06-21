@@ -136,9 +136,9 @@ class KafkaPlugin(BasePlugin):
     async def connect(
         self,
         *only: str,
-        listen: None | bool,
-        produce: None | bool,
-        monitor: None | bool,
+        listen: None | bool = None,
+        produce: None | bool = None,
+        monitor: None | bool = None,
         **params,
     ):
         cfg = self.cfg
