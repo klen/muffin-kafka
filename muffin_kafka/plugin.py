@@ -139,6 +139,7 @@ class KafkaPlugin(BasePlugin):
         listen: None | bool = None,
         produce: None | bool = None,
         monitor: None | bool = None,
+        group_id: None | str = None,
         **params,
     ):
         cfg = self.cfg
@@ -174,7 +175,7 @@ class KafkaPlugin(BasePlugin):
                             topic,
                             auto_offset_reset=cfg.auto_offset_reset,
                             enable_auto_commit=cfg.enable_auto_commit,
-                            group_id=cfg.group_id,
+                            group_id=group_id or cfg.group_id,
                             max_poll_records=cfg.max_poll_records,
                             **kafka_params,
                         )
