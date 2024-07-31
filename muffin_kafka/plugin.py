@@ -10,10 +10,7 @@ from typing import (
     Callable,
     ClassVar,
     Coroutine,
-    Dict,
-    List,
     Optional,
-    Tuple,
     TypedDict,
     cast,
 )
@@ -52,7 +49,7 @@ class Options(TypedDict):
 
 class KafkaPlugin(BasePlugin):
     name = "kafka"
-    defaults: ClassVar[Options] = {
+    defaults: ClassVar[Options] = {  # type: ignore[]
         "auto_offset_reset": "earliest",
         "bootstrap_servers": "localhost:9092",
         "client_id": "muffin",
@@ -73,12 +70,12 @@ class KafkaPlugin(BasePlugin):
     }
 
     producer: AIOKafkaProducer
-    consumers: ClassVar[Dict[str, AIOKafkaConsumer]] = {}
-    handlers: ClassVar[List[Tuple[Tuple[str, ...], Callable[..., Coroutine]]]] = []
+    consumers: ClassVar[dict[str, AIOKafkaConsumer]] = {}
+    handlers: ClassVar[list[tuple[tuple[str, ...], Callable[..., Coroutine]]]] = []
 
     def __init__(self, app: Optional[Application] = None, **kwargs):
         self.map: defaultdict = defaultdict(list)
-        self.tasks: List[Task] = []
+        self.tasks: list[Task] = []
         self.error_handler: Optional[TErrCallable] = None
         super().__init__(app, **kwargs)
 
