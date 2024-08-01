@@ -25,7 +25,7 @@ classifiers = [
 [tool.poetry.dependencies]
 python = "^3.9"
 muffin = "^0"
-aiokafka = "*"
+aiokafka = { version = "*", extras = ["lz4"] }
 
 [tool.poetry.group.dev.dependencies]
 black = "*"
