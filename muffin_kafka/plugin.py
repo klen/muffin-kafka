@@ -107,7 +107,9 @@ class KafkaPlugin(BasePlugin):
         if key and isinstance(key, str):
             key = key.encode("utf-8")
 
-        value = value.encode("utf-8") if isinstance(value, str) else json_dumps(value)
+        if not isinstance(value, bytes):
+            value = value.encode("utf-8") if isinstance(value, str) else json_dumps(value)
+
         return await self.producer.send(topic, value, key=key, **params)
 
     async def send_and_wait(self, topic: str, value: Any, key=None, **params):
