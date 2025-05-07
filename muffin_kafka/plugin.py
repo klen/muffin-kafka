@@ -99,6 +99,34 @@ class KafkaPlugin(BasePlugin):
         if cfg.listen:
             await gather(*[consumer.stop() for consumer in self.consumers.values()])
 
+    def get_params(self, **params):
+        cfg = self.cfg
+        kafka_params = dict(
+            {
+                "bootstrap_servers": cfg.bootstrap_servers,
+                "client_id": cfg.client_id,
+                "request_timeout_ms": cfg.request_timeout_ms,
+                "retry_backoff_ms": cfg.retry_backoff_ms,
+                "sasl_mechanism": cfg.sasl_mechanism,
+                "sasl_plain_password": cfg.sasl_plain_password,
+                "sasl_plain_username": cfg.sasl_plain_username,
+                "security_protocol": cfg.security_protocol,
+            },
+            **params,
+        )
+        if cfg.ssl_cafile:
+            kafka_params["ssl_context"] = helpers.create_ssl_context(cafile=cfg.ssl_cafile)
+
+        return kafka_params
+
+    def init_consumer(self, *topics: str, **params):
+        cfg = self.cfg
+        params.setdefault("group_id", cfg.group_id)
+        params.setdefault("max_poll_records", cfg.max_poll_records)
+        params.setdefault("auto_offset_reset", cfg.auto_offset_reset)
+        params.setdefault("enable_auto_commit", cfg.enable_auto_commit)
+        return AIOKafkaConsumer(*topics, **self.get_params(**params))
+
     async def send(self, topic: str, value: Any, key=None, **params):
         """Send a message to Kafka."""
         if not self.cfg.produce:
@@ -142,21 +170,7 @@ class KafkaPlugin(BasePlugin):
         **params,
     ):
         cfg = self.cfg
-        kafka_params = dict(
-            {
-                "bootstrap_servers": cfg.bootstrap_servers,
-                "client_id": cfg.client_id,
-                "request_timeout_ms": cfg.request_timeout_ms,
-                "retry_backoff_ms": cfg.retry_backoff_ms,
-                "sasl_mechanism": cfg.sasl_mechanism,
-                "sasl_plain_password": cfg.sasl_plain_password,
-                "sasl_plain_username": cfg.sasl_plain_username,
-                "security_protocol": cfg.security_protocol,
-            },
-            **params,
-        )
-        if cfg.ssl_cafile:
-            kafka_params["ssl_context"] = helpers.create_ssl_context(cafile=cfg.ssl_cafile)
+        kafka_params = self.get_params(**params)
 
         logger = self.app.logger
         logger.info("Kafka: Connecting to %s", self.cfg.bootstrap_servers)
@@ -170,13 +184,9 @@ class KafkaPlugin(BasePlugin):
                 for topic in filtered:
                     if topic not in self.consumers:
                         logger.info("Kafka: Listen to %s", topic)
-                        consumer = self.consumers[topic] = AIOKafkaConsumer(
+                        consumer = self.consumers[topic] = self.init_consumer(
                             topic,
-                            auto_offset_reset=cfg.auto_offset_reset,
-                            enable_auto_commit=cfg.enable_auto_commit,
                             group_id=group_id or cfg.group_id,
-                            max_poll_records=cfg.max_poll_records,
-                            **kafka_params,
                         )
                         await consumer.start()
 
