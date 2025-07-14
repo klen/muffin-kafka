@@ -14,7 +14,6 @@ classifiers = [
   "License :: OSI Approved :: MIT License",
   "Programming Language :: Python",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
@@ -24,7 +23,7 @@ classifiers = [
 ]
 
 [tool.poetry.dependencies]
-python = "^3.9"
+python = "^3.10"
 muffin = "^0"
 aiokafka = { version = "*", extras = ["lz4"] }
 
@@ -50,14 +49,14 @@ ignore_missing_imports = true
 [tool.tox]
 legacy_tox_ini = """
 [tox]
-envlist = py39,py310,py311,pypy39
+envlist = py310,py311,py312,py313,pypy310
 
 [testenv]
 deps = -e .[tests]
 commands =
 	pytest --mypy tests.py
 
-[testenv:pypy39]
+[testenv:pypy310]
 deps = -e .[tests]
 commands =
 	pytest tests.py
@@ -66,31 +65,32 @@ commands =
 [tool.ruff]
 fix = true
 line-length = 100
-target-version = "py39"
+target-version = "py310"
 exclude = [".venv", "docs", "examples"]
 
 [tool.ruff.lint]
 select = ["ALL"]
 ignore = [
-  "D",
-  "UP",
+  "A003",
   "ANN",
+  "D",
   "DJ",
   "EM",
-  "RSE",
-  "SLF",
-  "RET",
-  "S101",
-  "PLR2004",
-  "PLR0912",
+  "G004",
   "N804",
-  "A003",
+  "PLR0912",
+  "PLR2004",
+  "RET",
+  "RSE",
+  "S101",
+  "SLF",
   "TRY003",
+  "UP",
 ]
 
 [tool.black]
 line-length = 100
-target-version = ["py312"]
+target-version = ["py313"]
 preview = true
 
 [build-system]

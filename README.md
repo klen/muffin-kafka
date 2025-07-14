@@ -8,7 +8,7 @@
 
 ## Requirements
 
-* python >= 3.9
+- python >= 3.10
 
 ## Installation
 
@@ -46,11 +46,9 @@ TODO
 If you have any suggestions, bug reports or annoyances please report them to
 the issue tracker at https://github.com/klen/muffin-kafka/issues
 
-
 ## Contributing
 
 Development of the project happens at: https://github.com/klen/muffin-kafka
-
 
 ## License
 
