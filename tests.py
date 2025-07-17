@@ -82,6 +82,7 @@ async def test_send_and_wait(kafka: Kafka):
 
 async def test_healthcheck_ok(kafka: Kafka):
     mock_consumer = MagicMock()
+    mock_consumer.stop = AsyncMock()
 
     tp = MagicMock(topic="test", partition=0)
     mock_consumer.assignment.return_value = [tp]

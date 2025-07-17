@@ -139,13 +139,15 @@ class KafkaPlugin(BasePlugin):
         params.setdefault("enable_auto_commit", cfg.enable_auto_commit)
         return AIOKafkaConsumer(*topics, **self.get_params(**params))
 
-    def init_consumers(self, *only: str, **params):
+    async def init_consumers(self, *only: str, **params):
         for topic in self.handlers:
             if only and topic not in only:
                 continue
 
             if topic not in self.consumers:
-                self.consumers[topic] = self.init_consumer(topic, **params)
+                self.consumers[topic] = consumer = self.init_consumer(topic, **params)
+                self.app.logger.info("Kafka: Connect to %s", topic)
+                await consumer.start()
 
     async def send(self, topic: str, value: Any, key=None, **params):
         """Send a value to Kafka topic."""
@@ -201,11 +203,7 @@ class KafkaPlugin(BasePlugin):
         listen = cfg.listen if listen is None else listen
         if listen:
             logger.info("Kafka: Setup listeners")
-            self.init_consumers(*only, group_id=group_id or cfg.group_id)
-
-            for topic, customer in self.consumers.items():
-                logger.info("Kafka: Listen to %s", topic)
-                await customer.start()
+            await self.init_consumers(*only, group_id=group_id or cfg.group_id)
 
             self.tasks = [
                 create_task(self.__process__(consumer)) for consumer in self.consumers.values()
@@ -241,7 +239,7 @@ class KafkaPlugin(BasePlugin):
                 for fn in self.handlers[msg.topic]:
                     try:
                         await fn(msg)
-                    except Exception as exc:  # noqa: PERF203
+                    except Exception as exc:
                         logger.exception("Kafka: Error while processing message: %r", msg)
                         if self.error_handler:
                             await self.error_handler(exc)
@@ -283,7 +281,7 @@ class KafkaPlugin(BasePlugin):
                             poll_delay,
                         )
 
-                    except Exception as e:  # noqa: BLE001, PERF203
+                    except Exception as e:  # noqa: BLE001
                         logger.warning(f"[Kafka Monitor] Failed to fetch info for {tp}: {e}")
 
             await aio_sleep(interval)
@@ -305,7 +303,7 @@ class KafkaPlugin(BasePlugin):
 
     async def healthcheck(self, max_lag: int = 100) -> bool:
         """Check consumer health by analyzing lag."""
-        self.init_consumers()
+        await self.init_consumers()
 
         lags = await self.get_consumer_lag()
         if not lags:
@@ -316,4 +314,10 @@ class KafkaPlugin(BasePlugin):
                 self.app.logger.warning(f"[Kafka Healthcheck] High lag in {topic_partition}: {lag}")
                 return False
 
+        for consumer in self.consumers.values():
+            await consumer.stop()
+
         return True
+
+
+# ruff: noqa: PERF203
