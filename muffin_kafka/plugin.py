@@ -145,9 +145,11 @@ class KafkaPlugin(BasePlugin):
                 continue
 
             if topic not in self.consumers:
-                self.consumers[topic] = consumer = self.init_consumer(topic, **params)
+                self.consumers[topic] = self.init_consumer(topic, **params)
                 self.app.logger.info("Kafka: Connect to %s", topic)
-                await consumer.start()
+
+        if self.consumers:
+            await gather(*[consumer.start() for consumer in self.consumers.values()])
 
     async def send(self, topic: str, value: Any, key=None, **params):
         """Send a value to Kafka topic."""

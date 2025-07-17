@@ -90,17 +90,21 @@ async def test_healthcheck_ok(kafka: Kafka):
     mock_consumer.committed.return_value = awaitable(90)
 
     kafka.consumers = {"test": mock_consumer}
+    kafka.init_consumers = lambda: awaitable(None)  # type: ignore[]
     result = await kafka.healthcheck(max_lag=20)
     assert result is True
 
 
 async def test_healthcheck_fail(kafka: Kafka):
     mock_consumer = MagicMock()
+    mock_consumer.stop = AsyncMock()
+
     tp = MagicMock(topic="test", partition=0)
     mock_consumer.assignment.return_value = [tp]
     mock_consumer.end_offsets.return_value = awaitable({tp: 100})
     mock_consumer.committed.return_value = awaitable(50)
 
     kafka.consumers = {"test": mock_consumer}
+    kafka.init_consumers = lambda: awaitable(None)  # type: ignore[]
     result = await kafka.healthcheck(max_lag=20)
     assert result is False
