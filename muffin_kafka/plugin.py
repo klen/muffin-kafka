@@ -139,13 +139,13 @@ class KafkaPlugin(BasePlugin):
         params.setdefault("enable_auto_commit", cfg.enable_auto_commit)
         return AIOKafkaConsumer(*topics, **self.get_params(**params))
 
-    def init_consumers(self, *only: str, group_id: str | None = None):
+    def init_consumers(self, *only: str, **params):
         for topic in self.handlers:
             if only and topic not in only:
                 continue
 
             if topic not in self.consumers:
-                self.consumers[topic] = self.init_consumer(topic, group_id=group_id)
+                self.consumers[topic] = self.init_consumer(topic, **params)
 
     async def send(self, topic: str, value: Any, key=None, **params):
         """Send a value to Kafka topic."""
@@ -201,7 +201,7 @@ class KafkaPlugin(BasePlugin):
         listen = cfg.listen if listen is None else listen
         if listen:
             logger.info("Kafka: Setup listeners")
-            self.init_consumers(*only, group_id=group_id)
+            self.init_consumers(*only, group_id=group_id or cfg.group_id)
 
             for topic, customer in self.consumers.items():
                 logger.info("Kafka: Listen to %s", topic)
