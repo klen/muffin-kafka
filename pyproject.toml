@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "muffin-kafka"
-version = "0.7.4"
+version = "0.8.0"
 description = "Kafka Integration for Muffin framework"
 readme = "README.md"
 license = "MIT"
