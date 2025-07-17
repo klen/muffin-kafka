@@ -42,7 +42,8 @@ async def test_bind_topics_handler(kafka: Kafka):
         pass
 
     assert kafka.handlers
-    assert kafka.handlers[0][0] == ("test", "test2")
+    assert kafka.handlers["test"] == [handle]
+    assert kafka.handlers["test2"] == [handle]
 
 
 @pytest.mark.parametrize("options", [{"produce": True}])

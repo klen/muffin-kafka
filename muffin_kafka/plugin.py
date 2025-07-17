@@ -71,11 +71,11 @@ class KafkaPlugin(BasePlugin):
     }
 
     def __init__(self, app: Optional[Application] = None, **kwargs):
-        self.map: defaultdict[str, list[Callable]] = defaultdict(list)
         self.tasks: list[Task] = []
         self.consumers: dict[str, AIOKafkaConsumer] = {}
-        self.handlers: list[tuple[tuple[str, ...], Callable[..., Coroutine]]] = []
+        self.handlers: dict[str, list[Callable[..., Coroutine]]] = defaultdict(list)
         self.error_handler: Optional[TErrCallable] = None
+
         super().__init__(app, **kwargs)
 
     def setup(self, app: Application, **options) -> bool:
@@ -139,6 +139,14 @@ class KafkaPlugin(BasePlugin):
         params.setdefault("enable_auto_commit", cfg.enable_auto_commit)
         return AIOKafkaConsumer(*topics, **self.get_params(**params))
 
+    def init_consumers(self, *only: str, group_id: str | None = None):
+        for topic in self.handlers:
+            if only and topic not in only:
+                continue
+
+            if topic not in self.consumers:
+                self.consumers[topic] = self.init_consumer(topic, group_id=group_id)
+
     async def send(self, topic: str, value: Any, key=None, **params):
         """Send a value to Kafka topic."""
         if not self.cfg.produce:
@@ -161,7 +169,9 @@ class KafkaPlugin(BasePlugin):
         """Register a handler for Kafka messages."""
 
         def wrapper(fn):
-            self.handlers.append((topics, fn))
+            for topic in topics:
+                self.handlers[topic].append(fn)
+
             return fn
 
         return wrapper
@@ -191,17 +201,11 @@ class KafkaPlugin(BasePlugin):
         listen = cfg.listen if listen is None else listen
         if listen:
             logger.info("Kafka: Setup listeners")
-            for topics, fn in self.handlers:
-                filtered = [t for t in topics if t in only] if only else topics
-                for topic in filtered:
-                    if topic not in self.consumers:
-                        logger.info("Kafka: Listen to %s", topic)
-                        consumer = self.consumers[topic] = self.init_consumer(
-                            topic,
-                            group_id=group_id or cfg.group_id,
-                        )
-                        await consumer.start()
-                    self.map[topic].append(fn)
+            self.init_consumers(*only, group_id=group_id)
+
+            for topic, customer in self.consumers.items():
+                logger.info("Kafka: Listen to %s", topic)
+                await customer.start()
 
             self.tasks = [
                 create_task(self.__process__(consumer)) for consumer in self.consumers.values()
@@ -234,7 +238,7 @@ class KafkaPlugin(BasePlugin):
         try:
             async for msg in consumer:
                 logger.debug("Kafka msg: %s-%s-%s", msg.topic, msg.partition, msg.offset)
-                for fn in self.map.get(msg.topic, []):
+                for fn in self.handlers[msg.topic]:
                     try:
                         await fn(msg)
                     except Exception as exc:  # noqa: PERF203
@@ -250,6 +254,7 @@ class KafkaPlugin(BasePlugin):
 
         while interval:
             now = int(time() * 1000)
+            logger.info("[Kafka Monitor] Checking consumer status...")
 
             for consumer in self.consumers.values():
                 assigned = sorted(consumer.assignment(), key=lambda p: p.partition)
@@ -298,8 +303,10 @@ class KafkaPlugin(BasePlugin):
                 lags[f"{tp.topic}:{tp.partition}"] = lag
         return lags
 
-    async def healthcheck(self, max_lag: int = 1000) -> bool:
+    async def healthcheck(self, max_lag: int = 100) -> bool:
         """Check consumer health by analyzing lag."""
+        self.init_consumers()
+
         lags = await self.get_consumer_lag()
         if not lags:
             return False
