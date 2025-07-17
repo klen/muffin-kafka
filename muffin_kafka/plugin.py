@@ -78,6 +78,17 @@ class KafkaPlugin(BasePlugin):
         self.error_handler: Optional[TErrCallable] = None
         super().__init__(app, **kwargs)
 
+    def setup(self, app: Application, **options) -> bool:
+
+        @app.manage
+        async def kafka_healthcheck(max_lag=1000):
+            async with self:
+                if not await self.healthcheck(max_lag):
+                    self.app.logger.error("Kafka healthcheck failed")
+                    raise SystemExit(1)
+
+        return super().setup(app, **options)
+
     async def startup(self):
         self.app.logger.info("Kafka: Starting plugin")
         await self.connect()
