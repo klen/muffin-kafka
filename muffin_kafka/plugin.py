@@ -82,6 +82,10 @@ class KafkaPlugin(BasePlugin):
 
         @app.manage
         async def kafka_healthcheck(max_lag=1000):
+            """Run Kafka healthcheck.
+
+            param max_lag: Maximum allowed lag for healthcheck.
+            """
             async with self:
                 if not await self.healthcheck(max_lag):
                     self.app.logger.error("Kafka healthcheck failed")
