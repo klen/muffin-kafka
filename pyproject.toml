@@ -1,6 +1,6 @@
 [project]
 name = "muffin-kafka"
-version = "1.0.1"
+version = "1.0.2"
 description = "Kafka Integration for Muffin framework"
 authors = [{ name = "Kirill Klenov", email = "horneds@gmail.com" }]
 requires-python = ">=3.10,<4"
@@ -88,7 +88,7 @@ project-includes = ["muffin_kafka"]
 project-excludes = ["tests", "pyproject.toml"]
 
 [tool.bumpversion]
-current_version = "1.0.1"
+current_version = "1.0.2"
 commit = false
 tag = false
 
