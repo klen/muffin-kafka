@@ -1,12 +1,11 @@
-[tool.poetry]
+[project]
 name = "muffin-kafka"
 version = "0.9.3"
 description = "Kafka Integration for Muffin framework"
+authors = [{ name = "Kirill Klenov", email = "horneds@gmail.com" }]
+requires-python = ">=3.10,<4"
 readme = "README.md"
 license = "MIT"
-authors = ["Kirill Klenov <horneds@gmail.com>"]
-homepage = "https://github.com/klen/muffin-kafka"
-repository = "https://github.com/klen/muffin-kafka"
 keywords = ["kafka", "asyncio", "asgi", "muffin"]
 classifiers = [
   "Development Status :: 5 - Production/Stable",
@@ -18,51 +17,47 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Topic :: Internet :: WWW/HTTP",
   "Framework :: AsyncIO",
 ]
+dependencies = ["muffin", "aiokafka[lz4]"]
 
-[tool.poetry.dependencies]
-python = "^3.10"
-muffin = "*"
-aiokafka = { version = "*", extras = ["lz4"] }
+[project.urls]
+Homepage = "https://github.com/klen/muffin-kafka"
+Repository = "https://github.com/klen/muffin-kafka"
 
-[tool.poetry.group.dev.dependencies]
-black = "*"
-ipdb = "*"
-pre-commit = "*"
-pytest = "*"
-pytest-aio = "*"
-pytest-mypy = "*"
-ruff = "*"
+[dependency-groups]
+dev = ["ipdb", "pre-commit", "pytest", "pytest-aio", "ruff", "pyrefly"]
+
+[tool.uv]
+default-groups = "all"
+
+[tool.uv.build-backend]
+module-name = "muffin_kafka"
+module-root = ""
+
+[build-system]
+requires = ["uv_build>=0.10.2,<0.11.0"]
+build-backend = "uv_build"
 
 [tool.pytest.ini_options]
 addopts = "-lxsv"
 log_cli = true
 
-[tool.mypy]
-packages = ["muffin_kafka"]
-install_types = true
-non_interactive = true
-ignore_missing_imports = true
-
 [tool.tox]
 legacy_tox_ini = """
 [tox]
-envlist = py310,py311,py312,py313,pypy310
+envlist = py310,py311,py312,py313,py314,pypy311
 
 [testenv]
-deps = -e .[tests]
-commands =
-	pytest --mypy tests.py
-
-[testenv:pypy310]
 deps = -e .[tests]
 commands =
 	pytest tests.py
 """
 
 [tool.ruff]
+include = ["muffin-kafka/*.py"]
 fix = true
 line-length = 100
 target-version = "py310"
@@ -88,11 +83,16 @@ ignore = [
   "UP",
 ]
 
-[tool.black]
-line-length = 100
-target-version = ["py313"]
-preview = true
+[tool.pyrefly]
+project-includes = ["muffin_kafka"]
+project-excludes = ["tests", "pyproject.toml"]
 
-[build-system]
-requires = ["poetry-core>=1.0.0"]
-build-backend = "poetry.core.masonry.api"
+[tool.bumpversion]
+current_version = "0.9.3"
+commit = false
+tag = false
+
+[[tool.bumpversion.files]]
+filename = "pyproject.toml"
+search = 'version = "{current_version}"'
+replace = 'version = "{new_version}"'

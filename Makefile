@@ -3,52 +3,81 @@ VIRTUAL_ENV ?= .venv
 # =============
 #  Development
 # =============
+#
+.PHONY: clean
+clean:
+	rm -rf build/ dist/ docs/_build *.egg-info
+	find $(CURDIR) -name "*.py[co]" -delete
+	find $(CURDIR) -name "*.orig" -delete
+	find $(CURDIR)/$(MODULE) -name "__pycache__" | xargs rm -rf
 
-$(VIRTUAL_ENV): poetry.lock .pre-commit-config.yaml
-	@poetry install --with dev
-	@poetry run pre-commit install
+$(VIRTUAL_ENV): pyproject.toml .pre-commit-config.yaml
+	@uv sync
+	@uv run pre-commit install
 	@touch $(VIRTUAL_ENV)
 
-.PHONY: test
+.PHONY: t test
 # target: test - Runs tests
 t test: $(VIRTUAL_ENV)
-	@poetry run pytest tests.py
+	@echo 'Run tests...'
+	@uv run pytest tests
 
-.PHONY: mypy
-# target: mypy - Code checking
-mypy: $(VIRTUAL_ENV)
-	@poetry run mypy
+.PHONY: types
+types: $(VIRTUAL_ENV)
+	@echo 'Checking typing...'
+	@uv run pyrefly check
+
+.PHONY: lint
+lint: $(VIRTUAL_ENV)
+	@make types
+	@uv run ruff check
+
+outdated:
+	@echo "Checking for outdated dependencies..."
+	@uv tree --depth 1 --outdated | grep 'latest' || echo "All dependencies are up to date."
 
 # ==============
 #  Bump version
 # ==============
 
+VERSION	?= minor
+MAIN_BRANCH = master
+STAGE_BRANCH = develop
+
 .PHONY: release
-VPART?=minor
 # target: release - Bump version
 release:
-	@git checkout develop
-	@git pull
-	@poetry version $(VPART)
-	@git commit -am "build(release): version: `poetry version -s` 🎉"
-	@git tag `poetry version -s`
-	@git checkout main
-	@git pull
-	@git merge develop
-	@git checkout develop
-	@git push --tags origin develop main
+	git checkout $(MAIN_BRANCH)
+	git pull
+	git checkout $(STAGE_BRANCH)
+	git pull
+	uvx bump-my-version bump $(VERSION)
+	uv lock
+	@CVER="$$(uv version --short)"; \
+		{ \
+			printf 'build(release): %s\n\n' "$$CVER"; \
+			printf 'Changes:\n\n'; \
+			git log --oneline --pretty=format:'%s [%an]' $(MAIN_BRANCH)..$(STAGE_BRANCH) | grep -Evi 'github|^Merge' || true; \
+		} | git commit -a -F -; \
+		git tag -a "$$CVER" -m "$$CVER";
+	git checkout $(MAIN_BRANCH)
+	git merge $(STAGE_BRANCH)
+	git checkout $(STAGE_BRANCH)
+	git merge $(MAIN_BRANCH)
+	@git -c push.followTags=false push origin $(STAGE_BRANCH) $(MAIN_BRANCH)
+	@git push --tags origin
+	@echo "Release process complete for `uv version --short`"
 
 .PHONY: minor
 minor: release
 
 .PHONY: patch
 patch:
-	make release VPART=patch
+	make release VERSION=patch
 
 .PHONY: major
 major:
-	make release VPART=major
+	make release VERSION=major
 
-.PHONY: v version
-v version:
-	@poetry version -s
+version v:
+	uv version --short

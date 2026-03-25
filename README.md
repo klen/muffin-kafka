@@ -1,6 +1,7 @@
 # Muffin-Kafka
 
-**Muffin-Kafka** is an [Apache Kafka](https://kafka.apache.org) integration plugin for the [Muffin](https://klen.github.io/muffin) web framework, built on top of `aiokafka`.
+**Muffin-Kafka** is an [Apache Kafka](https://kafka.apache.org) integration plugin
+for the [Muffin](https://klen.github.io/muffin) web framework, built on top of `aiokafka`.
 
 [![Tests Status](https://github.com/klen/muffin-kafka/workflows/tests/badge.svg)](https://github.com/klen/muffin-kafka/actions)
 [![PYPI Version](https://img.shields.io/pypi/v/muffin-kafka)](https://pypi.org/project/muffin-kafka/)
@@ -115,7 +116,7 @@ Or set them via Muffin's config system (e.g. `.env`, YAML):
 "KAFKA_PRODUCE": True,
 ```
 
-### Supported Options:
+### Supported Options
 
 | Option                | Type   | Default            | Description                                 |
 | --------------------- | ------ | ------------------ | ------------------------------------------- |
@@ -141,14 +142,16 @@ Or set them via Muffin's config system (e.g. `.env`, YAML):
 
 ## 🐞 Bug Tracker
 
-Found a bug or have a feature request? Please open an issue at:
+Found a bug or have a feature request?
+Please open an issue at:
 [https://github.com/klen/muffin-kafka/issues](https://github.com/klen/muffin-kafka/issues)
 
 ---
 
 ## 🤝 Contributing
 
-Pull requests are welcome! Development happens here:
+Pull requests are welcome!
+Development happens here:
 [https://github.com/klen/muffin-kafka](https://github.com/klen/muffin-kafka)
 
 ---
