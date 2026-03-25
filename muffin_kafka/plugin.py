@@ -82,7 +82,11 @@ class KafkaPlugin(BasePlugin):
 
             If no topics are specified, all topics with registered handlers will be listened to.
             """
+            # If the plugin is not started yet, we need to start it before listening
             await self.listen(*topics, group_id=group_id, monitor=monitor)
+
+            # Wait until the plugin is stopped to exit the function
+            await gather(*self.tasks)
 
         return setup_result
 
