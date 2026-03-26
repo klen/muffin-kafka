@@ -121,10 +121,10 @@ class KafkaPlugin(BasePlugin):
     def init_consumer(self, *topics: str, **params: Any):
         """Initialize a consumer for the given topics and add it to the cluster."""
         cfg = self.cfg
-        params.setdefault("group_id", cfg.group_id)
         params.setdefault("max_poll_records", cfg.max_poll_records)
         params.setdefault("auto_offset_reset", cfg.auto_offset_reset)
         params.setdefault("enable_auto_commit", cfg.enable_auto_commit)
+        params["group_id"] = params.get("group_id") or cfg.group_id
         consumer = AIOKafkaConsumer(*topics, **self.get_params(**params))
         self.consumers.append(consumer)
         return consumer

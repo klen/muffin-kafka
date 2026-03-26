@@ -1,4 +1,7 @@
+from asyncio import get_running_loop
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from muffin_kafka.plugin import KafkaPlugin
 
@@ -66,3 +69,26 @@ async def test_shutdown_commits_and_stops_consumers(kafka: KafkaPlugin):
 
     consumer.commit.assert_awaited_once()
     consumer.stop.assert_awaited_once()
+
+
+@pytest.mark.parametrize("options", [{"group_id": "workers", "listen": False}])
+async def test_manage_listen_uses_default_group_id_when_not_passed(kafka: KafkaPlugin):
+    consumer = MagicMock()
+    consumer._client._topics = {"events"}
+    consumer.start = AsyncMock()
+
+    listen_task = get_running_loop().create_future()
+    listen_task.set_result(None)
+
+    def create_task_stub(coro):
+        coro.close()
+        return listen_task
+
+    with (
+        patch("muffin_kafka.plugin.AIOKafkaConsumer", return_value=consumer) as mock_consumer,
+        patch("muffin_kafka.plugin.create_task", side_effect=create_task_stub),
+    ):
+        await kafka.app.manage.commands["kafka-listen"]("events", monitor=False)
+
+    mock_consumer.assert_called_once()
+    assert mock_consumer.call_args.kwargs["group_id"] == "workers"
