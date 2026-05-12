@@ -1,3 +1,5 @@
+from unittest.mock import AsyncMock, MagicMock
+
 import muffin
 import pytest
 
@@ -22,3 +24,24 @@ def options():
 @pytest.fixture
 def kafka(app, options):
     return KafkaPlugin(app, **options)
+
+
+@pytest.fixture
+def mock_consumer():
+    """Create a mock Kafka consumer with common attributes pre-configured."""
+    consumer = MagicMock()
+    consumer._client._topics = set()
+    consumer.start = AsyncMock()
+    consumer.stop = AsyncMock()
+    consumer.commit = AsyncMock()
+    consumer.assignment = MagicMock(return_value=[])
+    consumer.end_offsets = AsyncMock(return_value={})
+    consumer.committed = AsyncMock(return_value=0)
+    return consumer
+
+
+@pytest.fixture
+def mock_producer():
+    """Create a mock Kafka producer."""
+    producer = AsyncMock()
+    return producer

@@ -1,26 +1,26 @@
 from __future__ import annotations
 
-from asyncio import Task, gather, sleep
-from collections import defaultdict
-from collections.abc import Awaitable
-from time import time
 from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
     ClassVar,
-    Coroutine,
     Mapping,
     Optional,
 )
 
-from aiokafka import AIOKafkaConsumer, AIOKafkaProducer, helpers
-from aiokafka.client import create_task
+from aiokafka import AIOKafkaProducer, helpers
 from asgi_tools._compat import json_dumps
 from muffin.plugins import BasePlugin, PluginError
 
-TCallable = Callable[..., Awaitable[Any]]
-TErrCallable = Callable[[BaseException], Awaitable[Any]]
+from muffin_kafka.consumers import (
+    ConsumerHandlers,
+    ConsumerPool,
+    ConsumerPoolHealthcheck,
+    TCallable,
+    TErrCallable,
+)
+from muffin_kafka.consumers.runner import BatchPoolRunner, PoolRunner, SinglePoolRunner
 
 if TYPE_CHECKING:
     from muffin.app import Application
@@ -34,6 +34,7 @@ class KafkaPlugin(BasePlugin):
         "listen": True,  # Auto start consumers for registered handlers
         "monitor": False,  # Enable consumer monitoring task
         "monitor_interval": 60,
+        "batch_size": None,  # Read messages in batches via getmany()
         #
         # Kafka connection parameters
         "bootstrap_servers": "localhost:9092",
@@ -54,82 +55,88 @@ class KafkaPlugin(BasePlugin):
     }
 
     def __init__(self, app: Optional[Application] = None, **kwargs):
-        self.error_handler: Optional[TErrCallable] = None
-
-        self.tasks: list[Task] = []
-        self.consumers: list[AIOKafkaConsumer] = []
+        self.runner: PoolRunner | None = None
         self.producer: AIOKafkaProducer | None = None
-        self.handlers: dict[str, list[Callable[..., Coroutine]]] = defaultdict(list)
+        self.handlers = ConsumerHandlers()
+        self.consumer_pool = ConsumerPool()
 
         super().__init__(app, **kwargs)
 
     def setup(self, app: Application, **options) -> bool:
-        setup_result = super().setup(app, **options)
+        """Setup the plugin by registering management commands."""
+        if super().setup(app, **options):
+            self.setup_commands(app)
 
-        @app.manage(name=f"{self.name}-healthcheck")
-        async def healthcheck(max_lag=1000):
-            """Run Kafka healthcheck.
+        cfg = self.cfg
+        consumer_params = self.get_common_params()
+        consumer_params.setdefault("max_poll_records", cfg.max_poll_records)
+        consumer_params.setdefault("auto_offset_reset", cfg.auto_offset_reset)
+        consumer_params.setdefault("enable_auto_commit", cfg.enable_auto_commit)
+        consumer_params.setdefault("group_id", cfg.group_id)
+        self.consumer_pool.setup(**consumer_params)
 
-            param max_lag: Maximum allowed lag for healthcheck.
-            """
-            if not await self.healthcheck(max_lag):
-                app.logger.error("Kafka healthcheck failed")
-                raise SystemExit(1)
-
-        @app.manage(name=f"{self.name}-listen", lifespan=True)
-        async def listen(*topics: str, group_id: str | None = None, monitor: bool = True):
-            """Start listening to Kafka topics.
-
-            If no topics are specified, all topics with registered handlers will be listened to.
-            """
-            # If the plugin is not started yet, we need to start it before listening
-            await self.listen(*topics, group_id=group_id, monitor=monitor)
-
-            # Wait until the plugin is stopped to exit the function
-            await gather(*self.tasks)
-
-        return setup_result
+        return True
 
     async def startup(self):
         """Start the plugin by initializing producer and/or consumers based on configuration."""
         logger = self.app.logger
         logger.info("Kafka: Starting plugin: %s", self.name)
+        cfg = self.cfg
 
-        if self.cfg.produce:
+        if cfg.produce:
             logger.info("Kafka: Setup producer")
-            self.producer = AIOKafkaProducer(**self.get_params())
+            self.producer = AIOKafkaProducer(**self.get_common_params())
             await self.producer.start()
 
-        if self.cfg.listen:
+        if cfg.listen:
             logger.info("Kafka: Setup listeners")
             await self.listen()
 
     async def shutdown(self):
         """Stop the plugin by cancelling tasks and stopping producer and consumers."""
         self.app.logger.info("Stopping Kafka plugin: %s", self.name)
-        for task in self.tasks:
-            task.cancel()
-        await gather(*self.tasks, return_exceptions=True)
+
+        if self.runner:
+            await self.runner.stop(commit=True)
 
         if self.producer:
             await self.producer.stop()
 
-        if self.cfg.listen:
-            await gather(*[consumer.commit() for consumer in self.consumers])
-            await gather(*[consumer.stop() for consumer in self.consumers])
+    def setup_commands(self, app: Application):
+        @app.manage(name=f"{self.name}-healthcheck")
+        async def healthcheck(*only: str, max_lag=1000):
+            """Run Kafka healthcheck.
 
-    def init_consumer(self, *topics: str, **params: Any):
-        """Initialize a consumer for the given topics and add it to the cluster."""
-        cfg = self.cfg
-        params.setdefault("max_poll_records", cfg.max_poll_records)
-        params.setdefault("auto_offset_reset", cfg.auto_offset_reset)
-        params.setdefault("enable_auto_commit", cfg.enable_auto_commit)
-        params["group_id"] = params.get("group_id") or cfg.group_id
-        consumer = AIOKafkaConsumer(*topics, **self.get_params(**params))
-        self.consumers.append(consumer)
-        return consumer
+            param topics: Optional list of topics to check.
+            param max_lag: Maximum allowed lag for healthcheck.
+            """
+            topics_to_listen = only or self.handlers.get_topics()
+            self.consumer_pool.init(*topics_to_listen)
+            healthcheck = ConsumerPoolHealthcheck(self.consumer_pool, max_lag=max_lag)
+            await healthcheck.process()
+            if not healthcheck:
+                app.logger.error("Kafka healthcheck failed")
+                raise SystemExit(1)
 
-    def get_params(self, **params: Any) -> dict[str, Any]:
+        @app.manage(name=f"{self.name}-listen", lifespan=True)
+        async def listen(
+            *topics: str,
+            group_id: str | None = None,
+            monitor: bool = True,
+            batch_size: int | None = None,
+        ):
+            """Start listening to Kafka topics.
+
+            If no topics are specified, all topics with registered handlers will be listened to.
+            """
+            # If the plugin is not started yet, we need to start it before listening
+            await self.listen(*topics, group_id=group_id, monitor=monitor, batch_size=batch_size)
+
+            # Wait until the plugin is stopped to exit the function
+            assert self.runner
+            await self.runner
+
+    def get_common_params(self, **params: Any) -> dict[str, Any]:
         """Get Kafka connection parameters by merging plugin configuration
         with provided parameters."""
         cfg = self.cfg
@@ -151,39 +158,27 @@ class KafkaPlugin(BasePlugin):
 
         return kafka_params
 
-    async def listen(self, *only: str, monitor: bool | None = None, **params: Any):
+    async def listen(
+        self,
+        *only: str,
+        monitor: bool | None = None,
+        batch_size: int | None = None,
+        **params: Any,
+    ):
         """Start listening to Kafka topics.
 
         If no topics are specified, all topics with registered handlers will be listened to.
         """
-        topics_to_listen = set(only) if only else set(self.handlers)
-        missing = topics_to_listen.copy()
-        for consumer in self.consumers:
-            missing -= set(consumer._client._topics)
-
-        # If there are any topics that don't have a consumer yet, initialize a new consumer for them
-        if missing:
-            self.init_consumer(*missing, **params)
-
-        topics = set(only) if only else set(self.handlers)
-        consumers = [c for c in self.consumers if topics.intersection(c._client._topics)]
-        if not consumers:
-            self.app.logger.warning("Kafka: No consumers found for topics: %s", topics)
-            return
-
-        await gather(*[consumer.start() for consumer in consumers])
-
-        for consumer in consumers:
-            task = create_task(self.__process__(consumer))
-            task.add_done_callback(self._log_task_errors)
-            self.tasks.append(task)
-
+        topics_to_listen = only or self.handlers.get_topics()
+        self.consumer_pool.init(*topics_to_listen, **params)
+        batch_size = batch_size or self.cfg.batch_size
+        self.runner = (
+            BatchPoolRunner(self.consumer_pool, self.handlers, batch_size=batch_size)
+            if batch_size
+            else SinglePoolRunner(self.consumer_pool, self.handlers)
+        )
         monitor = self.cfg.monitor if monitor is None else monitor
-        if monitor:
-            self.app.logger.info("Kafka: Setup monitor")
-            monitor_task = create_task(self.__monitor__())
-            monitor_task.add_done_callback(self._log_task_errors)
-            self.tasks.append(monitor_task)
+        await self.runner.start(monitor)
 
     async def send(self, topic: str, value: Any, key=None, **params):
         """Send a value to Kafka topic."""
@@ -205,9 +200,7 @@ class KafkaPlugin(BasePlugin):
         """Register a handler for Kafka messages."""
 
         def wrapper(fn):
-            for topic in topics:
-                self.handlers[topic].append(fn)
-
+            self.handlers.set_handler(fn, *topics)
             return fn
 
         return wrapper
@@ -215,93 +208,5 @@ class KafkaPlugin(BasePlugin):
     def handle_error(self, fn: TErrCallable) -> TErrCallable:
         """Register a handler for Kafka errors."""
 
-        self.error_handler = fn
+        self.handlers.set_error_handler(fn)
         return fn
-
-    def _log_task_errors(self, task: Task):
-        try:
-            exc = task.exception()
-            if exc:
-                self.app.logger.error("Kafka task crashed: %s", exc)
-        except Exception:
-            self.app.logger.exception("Kafka task error")
-
-    async def __process__(self, consumer: AIOKafkaConsumer):
-        logger = self.app.logger
-        logger.info("Start listening Kafka messages")
-        try:
-            async for msg in consumer:
-                logger.debug("Kafka msg: %s-%s-%s", msg.topic, msg.partition, msg.offset)
-                for fn in self.handlers[msg.topic]:
-                    try:
-                        await fn(msg)
-                    except Exception as exc:
-                        logger.exception("Kafka: Error while processing message: %r", msg)
-                        if self.error_handler:
-                            await self.error_handler(exc)
-        except Exception:
-            logger.exception("Kafka: Error while listening messages")
-
-    async def __monitor__(self, interval: int | None = None):
-        logger = self.app.logger
-        interval = self.cfg.monitor_interval if interval is None else interval
-
-        while interval:
-            now = int(time() * 1000)
-            for consumer in self.consumers:
-                assigned = consumer.assignment()
-                if not assigned:
-                    continue
-
-                end_offsets = await consumer.end_offsets(assigned)
-
-                for tp in assigned:
-                    try:
-                        pos = await consumer.position(tp)
-                        committed = await consumer.committed(tp) or 0
-                        end = end_offsets.get(tp, 0)
-                        last_poll = consumer.last_poll_timestamp(tp)
-                        lag = end - committed
-                        poll_delay = now - last_poll if last_poll else None
-
-                        logger.info(
-                            (
-                                "[Monitor] %s-%d | pos: %d | committed: %d "
-                                "| end: %d | lag: %d | poll_delay: %sms"
-                            ),
-                            tp.topic,
-                            tp.partition,
-                            pos,
-                            committed,
-                            end,
-                            lag,
-                            poll_delay,
-                        )
-
-                    except Exception as e:  # noqa: BLE001
-                        logger.warning(f"[Kafka Monitor] Failed to fetch info for {tp}: {e}")
-
-            await sleep(interval)
-
-    async def healthcheck(self, max_lag: int = 100) -> bool:
-        """Check consumer health by analyzing lag."""
-        for consumer in self.consumers:
-            assigned = consumer.assignment()
-            if not assigned:
-                continue
-
-            end_offsets = await consumer.end_offsets(assigned)
-
-            for tp in assigned:
-                committed = await consumer.committed(tp) or 0
-                lag = end_offsets[tp] - committed
-                if lag > max_lag:
-                    self.app.logger.warning(
-                        f"Consumer has lag {lag} on topic {tp.topic} partition {tp.partition}",
-                    )
-                    return False
-
-        return True
-
-
-# ruff: noqa: PERF203

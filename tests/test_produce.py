@@ -5,38 +5,68 @@ import pytest
 from muffin_kafka.plugin import KafkaPlugin
 
 
-@pytest.mark.parametrize("options", [{"produce": True, "listen": False}])
-async def test_connect_sets_up_producer(kafka: KafkaPlugin):
-    kafka.producer = AsyncMock()
-    with patch("muffin_kafka.plugin.AIOKafkaProducer") as mock_producer:
-        producer = AsyncMock()
-        mock_producer.return_value = producer
+class TestProducerStartup:
+    """Tests for producer initialization during startup."""
 
-        await kafka.startup()
+    @pytest.mark.parametrize("options", [{"produce": True, "listen": False}])
+    async def test_starts_producer_when_enabled(self, kafka: KafkaPlugin):
+        """When produce=True, startup should create and start a producer."""
+        with patch("muffin_kafka.plugin.AIOKafkaProducer") as mock_producer_class:
+            mock_producer = AsyncMock()
+            mock_producer_class.return_value = mock_producer
 
-    producer.start.assert_awaited_once()
-    assert kafka.producer == producer
+            await kafka.startup()
 
-
-@pytest.mark.parametrize("options", [{"produce": False}])
-async def test_send_without_producer(kafka: KafkaPlugin):
-    with pytest.raises(Exception, match="Producer is not enabled"):
-        await kafka.send("test", "value")
+        mock_producer_class.assert_called_once()
+        mock_producer.start.assert_awaited_once()
+        assert kafka.producer == mock_producer
 
 
-async def test_send_encodes_value_and_key(app):
-    kafka = KafkaPlugin(app, produce=True)
-    kafka.producer = AsyncMock()
+class TestSend:
+    """Tests for the send() method."""
 
-    await kafka.send("events", {"ok": True}, key="user-1", partition=1)
+    @pytest.mark.parametrize("options", [{"produce": False}])
+    async def test_raises_when_producer_not_enabled(self, kafka: KafkaPlugin):
+        """Should raise PluginError when trying to send but producer is not enabled."""
+        with pytest.raises(Exception, match="Producer is not enabled"):
+            await kafka.send("test", "value")
 
-    kafka.producer.send.assert_awaited_once()
-    topic, value = kafka.producer.send.await_args.args
-    key = kafka.producer.send.await_args.kwargs["key"]
-    partition = kafka.producer.send.await_args.kwargs["partition"]
+    async def test_raises_when_producer_not_initialized(self, app):
+        """Should raise PluginError when producer is enabled but not initialized."""
+        kafka = KafkaPlugin(app, produce=True)
+        # producer is None because startup() wasn't called
 
-    assert topic == "events"
-    assert isinstance(value, bytes)
-    assert b'"ok":true' in value
-    assert key == b"user-1"
-    assert partition == 1
+        with pytest.raises(Exception, match="Producer is not initialized"):
+            await kafka.send("test", "value")
+
+    async def test_encodes_dict_to_json_bytes(self, app):
+        """Should encode dict values to JSON bytes."""
+        kafka = KafkaPlugin(app, produce=True)
+        kafka.producer = AsyncMock()
+
+        await kafka.send("events", {"ok": True})
+
+        _topic, value = kafka.producer.send.await_args.args
+        assert isinstance(value, bytes)
+        assert b'"ok":true' in value
+
+    async def test_encodes_string_key_to_bytes(self, app):
+        """Should encode string keys to UTF-8 bytes."""
+        kafka = KafkaPlugin(app, produce=True)
+        kafka.producer = AsyncMock()
+
+        await kafka.send("events", {"data": "test"}, key="user-1")
+
+        key = kafka.producer.send.await_args.kwargs["key"]
+        assert key == b"user-1"
+
+    async def test_passes_through_additional_params(self, app):
+        """Should pass additional parameters (partition, headers, etc.) to the producer."""
+        kafka = KafkaPlugin(app, produce=True)
+        kafka.producer = AsyncMock()
+
+        await kafka.send("events", {"data": "test"}, partition=1, headers={"x-trace": "123"})
+
+        kwargs = kafka.producer.send.await_args.kwargs
+        assert kwargs["partition"] == 1
+        assert kwargs["headers"] == {"x-trace": "123"}
