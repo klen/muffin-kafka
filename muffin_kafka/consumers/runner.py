@@ -15,6 +15,7 @@ from muffin_kafka.consumers.handlers import ConsumerHandlers
 class PoolRunner(abc.ABC):
     pool: ConsumerPool
     handlers: ConsumerHandlers
+    enable_auto_commit: bool = True
     tasks: list = dc.field(default_factory=list)
 
     async def start(self, monitor: int | None = None):
@@ -61,6 +62,8 @@ class SinglePoolRunner(PoolRunner):
         while True:
             msg = await consumer.getone()
             await self.handlers(msg)
+            if not self.enable_auto_commit:
+                await consumer.commit()
 
 
 @dc.dataclass
@@ -73,3 +76,5 @@ class BatchPoolRunner(PoolRunner):
             for messages in data.values():
                 for msg in messages:
                     await self.handlers(msg)
+            if not self.enable_auto_commit:
+                await consumer.commit()

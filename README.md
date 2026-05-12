@@ -131,7 +131,7 @@ Or set them via Muffin's config system (e.g. `.env`, YAML):
 | `batch_size`          | `int`  | `None`             | Read messages in batches (uses `getmany()`) |
 | `monitor_interval`    | `int`  | `60`               | Monitor frequency in seconds                |
 | `auto_offset_reset`   | `str`  | `"earliest"`       | Where to start if no committed offset       |
-| `enable_auto_commit`  | `bool` | `False`            | Automatically commit offsets                |
+| `enable_auto_commit`  | `bool` | `False`            | Auto-commit offsets after each message/batch. When `False`, the plugin commits manually after all handlers succeed. |
 | `max_poll_records`    | `int`  | `None`             | Max records to poll in one batch            |
 | `request_timeout_ms`  | `int`  | `30000`            | Request timeout                             |
 | `retry_backoff_ms`    | `int`  | `1000`             | Retry interval on failure                   |

@@ -173,9 +173,18 @@ class KafkaPlugin(BasePlugin):
         self.consumer_pool.init(*topics_to_listen, **params)
         batch_size = batch_size or self.cfg.batch_size
         self.runner = (
-            BatchPoolRunner(self.consumer_pool, self.handlers, batch_size=batch_size)
+            BatchPoolRunner(
+                self.consumer_pool,
+                self.handlers,
+                batch_size=batch_size,
+                enable_auto_commit=self.cfg.enable_auto_commit,
+            )
             if batch_size
-            else SinglePoolRunner(self.consumer_pool, self.handlers)
+            else SinglePoolRunner(
+                self.consumer_pool,
+                self.handlers,
+                enable_auto_commit=self.cfg.enable_auto_commit,
+            )
         )
         monitor = self.cfg.monitor if monitor is None else monitor
         await self.runner.start(monitor)
