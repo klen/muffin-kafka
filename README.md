@@ -12,12 +12,13 @@ for the [Muffin](https://klen.github.io/muffin) web framework, built on top of `
 ## 🚀 Features
 
 - **Async Kafka integration** using `aiokafka`
+- **Single or batch message consumption** — stream messages one-by-one or read in batches
 - **Per-topic task model** — each topic is consumed in an isolated asyncio task
 - **Simple handler registration** using `@plugin.handle_topics(...)`
 - **Manual or auto-commit support**, custom group IDs
-- **Producer support** (`send` / `send_and_wait`)
+- **Producer support** via `send`
 - **Built-in monitoring** with offsets, lag, and poll delay
-- **Healthcheck support** for liveness probes and observability
+- **Healthcheck manage command** for liveness probes and observability
 - Optional error handler via `@plugin.handle_error(...)`
 
 ---
@@ -69,25 +70,26 @@ You can also register a global error handler:
 
 ### 📤 Sending Messages
 
-You can send messages to Kafka topics using the `send` or `send_and_wait` methods:
+You can send messages to Kafka topics using the `send` method:
 
 ```python
-    # Send a message without waiting for acknowledgment
+    # Send a message
     await kafka.send("events.user", {"action": "signup"}, key="user123")
-
-    # Or wait for broker acknowledgment
-    result = await kafka.send_and_wait("events.user", {"action": "login"})
 ```
 
 ### 🔄 Healthcheck
 
-You can monitor consumer health by checking lag across partitions:
+Run the `kafka-healthcheck` management command to check consumer lag:
+
+```bash
+    python app.py kafka-healthcheck
+```
+
+Or programmatically via Muffin's manage command:
 
 ```python
-    # Check if Kafka lag is within acceptable limits
-    ok = await kafka.healthcheck(max_lag=1000)
-    if not ok:
-        raise RuntimeError("Kafka lag too high")
+    # Check specific topics
+    await app.manage.commands["kafka-healthcheck"]("events.user", max_lag=1000)
 ```
 
 ## 📊 Monitoring
@@ -126,6 +128,7 @@ Or set them via Muffin's config system (e.g. `.env`, YAML):
 | `produce`             | `bool` | `False`            | Enable Kafka producer                       |
 | `listen`              | `bool` | `True`             | Enable consumers (message listening)        |
 | `monitor`             | `bool` | `False`            | Enable internal consumer monitor            |
+| `batch_size`          | `int`  | `None`             | Read messages in batches (uses `getmany()`) |
 | `monitor_interval`    | `int`  | `60`               | Monitor frequency in seconds                |
 | `auto_offset_reset`   | `str`  | `"earliest"`       | Where to start if no committed offset       |
 | `enable_auto_commit`  | `bool` | `False`            | Automatically commit offsets                |
