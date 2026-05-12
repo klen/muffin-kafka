@@ -36,7 +36,8 @@ class TestListen:
     ):
         mock_consumer._client._topics = {"events"}
 
-        async def getmany():
+        async def getmany(**kwargs):
+            del kwargs
             raise RuntimeError("stop")
 
         mock_consumer.getmany = getmany
@@ -164,8 +165,9 @@ class TestRunner:
         tp = MagicMock()
         call_count = 0
 
-        async def getmany_side():
+        async def getmany_side(**kwargs):
             nonlocal call_count
+            del kwargs
             call_count += 1
             if call_count == 1:
                 return {tp: [msg1, msg2]}
