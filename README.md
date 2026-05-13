@@ -77,12 +77,43 @@ You can send messages to Kafka topics using the `send` method:
     await kafka.send("events.user", {"action": "signup"}, key="user123")
 ```
 
+### 📡 Listening (kafka-listen)
+
+Start consuming messages using the `kafka-listen` management command:
+
+```bash
+    # Listen to all registered handlers
+    muffin myapp kafka-listen
+
+    # Listen to specific topics only
+    muffin myapp kafka-listen events.user events.order
+
+    # Override group id for this run
+    muffin myapp kafka-listen --group-id=workers-v2
+
+    # Enable monitoring with custom interval
+    muffin myapp kafka-listen --monitor --monitor-interval=30
+
+    # Batch mode (process messages in batches)
+    muffin myapp kafka-listen --batch-size=100
+```
+
+**CLI Options:**
+
+| Option | Description |
+|--------|-------------|
+| `topics` | Specific topics to listen (optional, defaults to all registered handlers) |
+| `--group-id` | Override consumer group ID |
+| `--monitor` | Enable built-in monitoring |
+| `--monitor-interval` | Monitoring interval in seconds (default: 60) |
+| `--batch-size` | Read messages in batches (uses `getmany()`) |
+
 ### 🔄 Healthcheck
 
 Run the `kafka-healthcheck` management command to check consumer lag:
 
 ```bash
-    python app.py kafka-healthcheck
+    muffin myapp kafka-healthcheck
 ```
 
 Or programmatically via Muffin's manage command:
