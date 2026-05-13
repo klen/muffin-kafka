@@ -64,16 +64,11 @@ class KafkaPlugin(BasePlugin):
 
     def setup(self, app: Application, **options) -> bool:
         """Setup the plugin by registering management commands."""
-        if super().setup(app, **options):
-            self.setup_commands(app)
+        if not super().setup(app, **options):
+            return False
 
-        cfg = self.cfg
-        consumer_params = self.get_common_params()
-        consumer_params.setdefault("max_poll_records", cfg.max_poll_records)
-        consumer_params.setdefault("auto_offset_reset", cfg.auto_offset_reset)
-        consumer_params.setdefault("enable_auto_commit", cfg.enable_auto_commit)
-        consumer_params.setdefault("group_id", cfg.group_id)
-        self.consumer_pool.setup(**consumer_params)
+        self.setup_commands(app)
+        self.setup_pool()
 
         return True
 
@@ -135,6 +130,16 @@ class KafkaPlugin(BasePlugin):
             # Wait until the plugin is stopped to exit the function
             assert self.runner
             await self.runner
+
+    def setup_pool(self):
+        """Setup the consumer pool with Kafka connection parameters."""
+        cfg = self.cfg
+        consumer_params = self.get_common_params()
+        consumer_params.setdefault("max_poll_records", cfg.max_poll_records)
+        consumer_params.setdefault("auto_offset_reset", cfg.auto_offset_reset)
+        consumer_params.setdefault("enable_auto_commit", cfg.enable_auto_commit)
+        consumer_params.setdefault("group_id", cfg.group_id)
+        self.consumer_pool.setup(**consumer_params)
 
     def get_common_params(self, **params: Any) -> dict[str, Any]:
         """Get Kafka connection parameters by merging plugin configuration
