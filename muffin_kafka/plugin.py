@@ -118,14 +118,19 @@ class KafkaPlugin(BasePlugin):
             *topics: str,
             group_id: str | None = None,
             monitor: bool = True,
-            batch_size: int | None = None,
+            batch_size: int = 0,
         ):
             """Start listening to Kafka topics.
 
             If no topics are specified, all topics with registered handlers will be listened to.
             """
             # If the plugin is not started yet, we need to start it before listening
-            await self.listen(*topics, group_id=group_id, monitor=monitor, batch_size=batch_size)
+            await self.listen(
+                *topics,
+                group_id=group_id,
+                monitor=monitor,
+                batch_size=int(batch_size),
+            )
 
             # Wait until the plugin is stopped to exit the function
             assert self.runner

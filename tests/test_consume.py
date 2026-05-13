@@ -131,6 +131,28 @@ class TestListen:
         assert isinstance(kafka.runner, BatchPoolRunner)
         assert kafka.runner.batch_size == 5
 
+    async def test_coerces_batch_size_from_string(self, kafka: KafkaPlugin):
+        consumer = MagicMock()
+        consumer._client._topics = {"events"}
+        consumer.start = AsyncMock()
+
+        done_future = Future()
+        done_future.set_result(None)
+
+        with (
+            patch(
+                "muffin_kafka.consumers.pool.AIOKafkaConsumer",
+                return_value=consumer,
+            ) as mock_consumer_class,
+            patch("muffin_kafka.consumers.runner.create_task"),
+            patch("muffin_kafka.consumers.runner.gather", return_value=done_future),
+        ):
+            await kafka.app.manage.commands["kafka-listen"]("events", monitor=False, batch_size="5")
+
+        mock_consumer_class.assert_called_once()
+        assert isinstance(kafka.runner, BatchPoolRunner)
+        assert kafka.runner.batch_size == 5
+
 
 class TestShutdown:
     """Tests for the shutdown() method."""
