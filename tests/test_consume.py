@@ -153,6 +153,35 @@ class TestListen:
         assert isinstance(kafka.runner, BatchPoolRunner)
         assert kafka.runner.batch_size == 5
 
+    async def test_uses_monitor_interval_from_config(self, app, options):
+        options["monitor"] = True
+        options["monitor_interval"] = 30
+        kafka = KafkaPlugin(app, **options)
+
+        consumer = MagicMock()
+        consumer._client._topics = {"events"}
+        consumer.start = AsyncMock()
+
+        done_future = Future()
+        done_future.set_result(None)
+        logger_mock = AsyncMock()
+
+        with (
+            patch(
+                "muffin_kafka.consumers.pool.AIOKafkaConsumer",
+                return_value=consumer,
+            ),
+            patch(
+                "muffin_kafka.consumers.runner.ConsumerPoolLogger",
+                return_value=logger_mock,
+            ) as mock_logger_class,
+            patch("muffin_kafka.consumers.runner.gather", return_value=done_future),
+        ):
+            await kafka.app.manage.commands["kafka-listen"]("events")
+
+        mock_logger_class.assert_called_once()
+        assert mock_logger_class.call_args.kwargs["interval"] == 30
+
 
 class TestShutdown:
     """Tests for the shutdown() method."""

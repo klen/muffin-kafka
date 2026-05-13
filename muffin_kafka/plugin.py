@@ -196,8 +196,9 @@ class KafkaPlugin(BasePlugin):
                 enable_auto_commit=self.cfg.enable_auto_commit,
             )
         )
-        monitor = self.cfg.monitor if monitor is None else monitor
-        await self.runner.start(monitor)
+        should_monitor = self.cfg.monitor if monitor is None else monitor
+        monitor_interval = self.cfg.monitor_interval if should_monitor else None
+        await self.runner.start(monitor_interval)
 
     async def send(self, topic: str, value: Any, key=None, **params):
         """Send a value to Kafka topic."""
