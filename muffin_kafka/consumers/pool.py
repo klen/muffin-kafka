@@ -26,8 +26,9 @@ class ConsumerPool:
             self.consumers.append(consumer)
 
     def init_consumer(self, *topics: str, **params) -> AIOKafkaConsumer:
-        params["group_id"] = params.get("group_id") or self.group_id
-        return AIOKafkaConsumer(*topics, **params)
+        merged = dict(self.params, **params)
+        merged["group_id"] = merged.get("group_id") or self.group_id
+        return AIOKafkaConsumer(*topics, **merged)
 
     async def start(self):
         await gather(*[consumer.start() for consumer in self.consumers])

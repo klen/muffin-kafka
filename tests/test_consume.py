@@ -50,6 +50,26 @@ class TestListen:
         assert isinstance(kafka.runner, BatchPoolRunner)
         assert kafka.runner.batch_size == 10
 
+    async def test_passes_setup_params_to_consumer(self, kafka: KafkaPlugin):
+        kafka.consumer_pool.setup(
+            group_id="test-group",
+            bootstrap_servers="kafka:9092",
+            client_id="test-client",
+        )
+        consumer = MagicMock()
+
+        with patch(
+            "muffin_kafka.consumers.pool.AIOKafkaConsumer",
+            return_value=consumer,
+        ) as mock_class:
+            kafka.consumer_pool.init_consumer("events")
+
+        mock_class.assert_called_once()
+        call_kwargs = mock_class.call_args.kwargs
+        assert call_kwargs["group_id"] == "test-group"
+        assert call_kwargs["bootstrap_servers"] == "kafka:9092"
+        assert call_kwargs["client_id"] == "test-client"
+
     async def test_starts_pool(self, kafka: KafkaPlugin, mock_consumer):
         mock_consumer._client._topics = {"events"}
 
