@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from muffin_kafka.consumers import ConsumerPool
+from muffin_kafka.consumers import ConsumerHandlers, ConsumerPool
 from muffin_kafka.consumers.runner import BatchPoolRunner, SinglePoolRunner
 from muffin_kafka.plugin import KafkaPlugin
 
@@ -69,6 +69,30 @@ class TestListen:
         assert call_kwargs["group_id"] == "test-group"
         assert call_kwargs["bootstrap_servers"] == "kafka:9092"
         assert call_kwargs["client_id"] == "test-client"
+
+    async def test_pool_starts_before_creating_tasks(self, mock_consumer):
+        call_order = []
+        pool = ConsumerPool()
+        pool.consumers = [mock_consumer]
+        pool.is_started = False
+        handlers = ConsumerHandlers()
+        runner = SinglePoolRunner(pool=pool, handlers=handlers)
+
+        async def fake_pool_start():
+            call_order.append("pool.start")
+            pool.is_started = True
+
+        pool.start = fake_pool_start
+
+        def fake_register_task(coro):
+            call_order.append("register_task")
+            coro.close()
+
+        runner.register_task = fake_register_task
+
+        await runner.start()
+
+        assert call_order == ["pool.start", "register_task"]
 
     async def test_starts_pool(self, kafka: KafkaPlugin, mock_consumer):
         mock_consumer._client._topics = {"events"}

@@ -19,6 +19,8 @@ class PoolRunner(abc.ABC):
     tasks: list = dc.field(default_factory=list)
 
     async def start(self, monitor: int | None = None):
+        await self.pool.start()
+
         for consumer in self.pool:
             self.register_task(self.run_consumer(consumer))
 
@@ -26,8 +28,6 @@ class PoolRunner(abc.ABC):
             logger.info("Starting Kafka consumer pool monitor with interval %s seconds", monitor)
             pool_logger = ConsumerPoolLogger(pool=self.pool, interval=monitor)
             self.register_task(pool_logger())
-
-        await self.pool.start()
 
     async def stop(self, *, commit: bool = True):
         await self.pool.stop(commit=commit)
