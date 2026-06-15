@@ -63,3 +63,27 @@ class TestCommonParams:
         params = kafka.get_common_params()
 
         assert "ssl_context" not in params
+
+
+class TestSetupCommands:
+    """Tests for the setup_commands configuration option."""
+
+    async def test_setup_commands_defaults_to_true(self):
+        """setup_commands should default to True."""
+        plugin = KafkaPlugin()
+
+        assert plugin.defaults["setup_commands"] is True
+
+    async def test_registers_commands_when_setup_commands_is_true(self, app):
+        """Management commands should be registered when setup_commands is True."""
+        kafka = KafkaPlugin(app, setup_commands=True)
+
+        assert "kafka-healthcheck" in kafka.app.manage.commands
+        assert "kafka-listen" in kafka.app.manage.commands
+
+    async def test_skips_commands_when_setup_commands_is_false(self, app):
+        """Management commands should NOT be registered when setup_commands is False."""
+        kafka = KafkaPlugin(app, setup_commands=False)
+
+        assert "kafka-healthcheck" not in kafka.app.manage.commands
+        assert "kafka-listen" not in kafka.app.manage.commands

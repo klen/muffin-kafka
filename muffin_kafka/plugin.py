@@ -35,6 +35,7 @@ class KafkaPlugin(BasePlugin):
         "monitor": False,  # Enable consumer monitoring task
         "monitor_interval": 60,
         "batch_size": None,  # Read messages in batches via getmany()
+        "setup_commands": True,  # Register management commands
         #
         # Kafka connection parameters
         "bootstrap_servers": "localhost:9092",
@@ -98,6 +99,10 @@ class KafkaPlugin(BasePlugin):
             await self.producer.stop()
 
     def setup_commands(self, app: Application):
+        """Setup management commands for the plugin."""
+        if not self.cfg.setup_commands:
+            return
+
         @app.manage(name=f"{self.name}-healthcheck")
         async def healthcheck(*only: str, max_lag=1000):
             """Run Kafka healthcheck.

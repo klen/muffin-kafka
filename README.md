@@ -9,7 +9,7 @@ for the [Muffin](https://klen.github.io/muffin) web framework, built on top of `
 
 ---
 
-## 🚀 Features
+## Features
 
 - **Async Kafka integration** using `aiokafka`
 - **Single or batch message consumption** — stream messages one-by-one or read in batches
@@ -23,7 +23,7 @@ for the [Muffin](https://klen.github.io/muffin) web framework, built on top of `
 
 ---
 
-## ✅ Requirements
+## Requirements
 
 - Python ≥ 3.10
 - Muffin ≥ 0.71
@@ -31,13 +31,13 @@ for the [Muffin](https://klen.github.io/muffin) web framework, built on top of `
 
 ---
 
-## 📦 Installation
+## Installation
 
 ```bash
 pip install muffin-kafka
 ```
 
-## ⚙️ Usage
+## Usage
 
 ```python
     from muffin import Application
@@ -49,7 +49,7 @@ pip install muffin-kafka
     kafka = Kafka(app, bootstrap_servers="localhost:9092", produce=True, listen=True)
 ```
 
-### 🧩 Registering Handlers
+### Registering Handlers
 
 Use `@kafka.handle_topics(...)` to register a handler for specific Kafka topics:
 
@@ -68,7 +68,7 @@ You can also register a global error handler:
         print("Kafka error:", exc)
 ```
 
-### 📤 Sending Messages
+### Sending Messages
 
 You can send messages to Kafka topics using the `send` method:
 
@@ -77,7 +77,7 @@ You can send messages to Kafka topics using the `send` method:
     await kafka.send("events.user", {"action": "signup"}, key="user123")
 ```
 
-### 📡 Listening (kafka-listen)
+### Listening (kafka-listen)
 
 Start consuming messages using the `kafka-listen` management command:
 
@@ -108,7 +108,7 @@ Start consuming messages using the `kafka-listen` management command:
 | `--monitor-interval` | Monitoring interval in seconds (default: 60) |
 | `--batch-size` | Read messages in batches (uses `getmany()`) |
 
-### 🔄 Healthcheck
+### Healthcheck
 
 Run the `kafka-healthcheck` management command to check consumer lag:
 
@@ -123,7 +123,7 @@ Or programmatically via Muffin's manage command:
     await app.manage.commands["kafka-healthcheck"]("events.user", max_lag=1000)
 ```
 
-## 📊 Monitoring
+## Monitoring
 
 If monitor=True is passed, the plugin will log:
 
@@ -134,7 +134,7 @@ If monitor=True is passed, the plugin will log:
 
 This data can be extended for Prometheus/Grafana metrics or alerting.
 
-## ⚙️ Configuration Options
+## Configuration Options
 
 You can pass configuration options either as keyword arguments to the plugin:
 
@@ -160,6 +160,7 @@ Or set them via Muffin's config system (e.g. `.env`, YAML):
 | `listen`              | `bool` | `True`             | Enable consumers (message listening)        |
 | `monitor`             | `bool` | `False`            | Enable internal consumer monitor            |
 | `batch_size`          | `int`  | `None`             | Read messages in batches (uses `getmany()`) |
+| `setup_commands`      | `bool` | `True`             | Register management commands (`kafka-healthcheck`, `kafka-listen`) |
 | `monitor_interval`    | `int`  | `60`               | Monitor frequency in seconds                |
 | `auto_offset_reset`   | `str`  | `"earliest"`       | Where to start if no committed offset       |
 | `enable_auto_commit`  | `bool` | `False`            | Auto-commit offsets after each message/batch. When `False`, the plugin commits manually after all handlers succeed. |
@@ -174,7 +175,7 @@ Or set them via Muffin's config system (e.g. `.env`, YAML):
 
 ---
 
-## 🐞 Bug Tracker
+## Bug Tracker
 
 Found a bug or have a feature request?
 Please open an issue at:
@@ -182,7 +183,7 @@ Please open an issue at:
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 Pull requests are welcome!
 Development happens here:
@@ -190,6 +191,6 @@ Development happens here:
 
 ---
 
-## 🪪 License
+## License
 
 **MIT** – See [LICENSE](./LICENSE) for full details.
