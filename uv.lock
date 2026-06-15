@@ -495,7 +495,7 @@ wheels = [
 
 [[package]]
 name = "muffin-kafka"
-version = "2.2.0"
+version = "2.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiokafka", extra = ["lz4"] },
