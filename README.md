@@ -25,7 +25,7 @@ for the [Muffin](https://klen.github.io/muffin) web framework, built on top of `
 
 ## Requirements
 
-- Python ≥ 3.10
+- Python ≥ 3.11
 - Muffin ≥ 0.71
 - Kafka cluster or broker (local or cloud)
 

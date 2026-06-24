@@ -122,7 +122,10 @@ class TestListen:
                 "muffin_kafka.consumers.pool.AIOKafkaConsumer",
                 return_value=consumer,
             ) as mock_consumer_class,
-            patch("muffin_kafka.consumers.runner.create_task"),
+            patch(
+                "muffin_kafka.consumers.runner.create_task",
+                side_effect=lambda c: (c.close(), MagicMock())[1],
+            ),
             patch("muffin_kafka.consumers.runner.gather", return_value=done_future),
         ):
             await kafka.app.manage.commands["kafka-listen"]("events", monitor=False, batch_size=5)
@@ -144,7 +147,10 @@ class TestListen:
                 "muffin_kafka.consumers.pool.AIOKafkaConsumer",
                 return_value=consumer,
             ) as mock_consumer_class,
-            patch("muffin_kafka.consumers.runner.create_task"),
+            patch(
+                "muffin_kafka.consumers.runner.create_task",
+                side_effect=lambda c: (c.close(), MagicMock())[1],
+            ),
             patch("muffin_kafka.consumers.runner.gather", return_value=done_future),
         ):
             await kafka.app.manage.commands["kafka-listen"]("events", monitor=False, batch_size="5")
@@ -250,7 +256,6 @@ class TestRunner:
         assert handler_calls[0] == msg1
         assert handler_calls[1] == msg2
 
-    @pytest.mark.filterwarnings("ignore:coroutine.*was never awaited:RuntimeWarning")
     @pytest.mark.parametrize("options", [{"batch_size": 10}])
     async def test_batch_runner_calls_handler_per_message(self, kafka: KafkaPlugin, mock_messages):
         msg1, msg2 = mock_messages

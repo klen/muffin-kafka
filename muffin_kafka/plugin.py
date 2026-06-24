@@ -1,13 +1,6 @@
 from __future__ import annotations
 
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    ClassVar,
-    Mapping,
-    Optional,
-)
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Mapping
 
 from aiokafka import AIOKafkaProducer, helpers
 from asgi_tools._compat import json_dumps
@@ -55,7 +48,7 @@ class KafkaPlugin(BasePlugin):
         "max_poll_records": None,
     }
 
-    def __init__(self, app: Optional[Application] = None, **kwargs):
+    def __init__(self, app: Application | None = None, **kwargs):
         self.runner: PoolRunner | None = None
         self.producer: AIOKafkaProducer | None = None
         self.handlers = ConsumerHandlers()

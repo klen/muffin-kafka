@@ -1,7 +1,7 @@
 # AGENTS.md
 
 - Language: Python, Packaging: UV (`pyproject.toml`)
-- Runtime: Python 3.10+, Main package: `muffin_kafka`
+- Runtime: Python 3.11+, Main package: `muffin_kafka`
 - Tests: `tests/`, CI: `.github/workflows/tests.yml`
 
 ## Commands
@@ -13,7 +13,7 @@ uv run ruff      # lint
 uv run ruff check --fix  # auto-fix
 ```
 
-- CI matrix: 3.10–3.14.
+- CI matrix: 3.11–3.14.
     Runs on pushes/PRs to `main` and `develop`.
 
 ## Code Style
@@ -21,7 +21,7 @@ uv run ruff check --fix  # auto-fix
 - Ruff formats, max line 100, `select = ["ALL"]`.
 - Type hints expected: built-in generics (`list[str]`), `X | None`.
 - One import per line; ordering: stdlib, third-party, local.
-- Prefer `async def` for I/O; use `asyncio.gather` for startup/shutdown.
+- Prefer `async def` for I/O; use `asyncio.TaskGroup` for startup/shutdown.
 - Raise `PluginError` for invalid plugin state.
     Avoid silent `except`.
 - Log exceptions with `logger.exception(...)` before continuing.

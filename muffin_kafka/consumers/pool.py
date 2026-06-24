@@ -1,5 +1,5 @@
+import asyncio
 import dataclasses as dc
-from asyncio import gather
 
 from aiokafka.consumer.consumer import AIOKafkaConsumer
 
@@ -31,14 +31,20 @@ class ConsumerPool:
         return AIOKafkaConsumer(*topics, **merged)
 
     async def start(self):
-        await gather(*[consumer.start() for consumer in self.consumers])
+        async with asyncio.TaskGroup() as tg:
+            for consumer in self.consumers:
+                tg.create_task(consumer.start())
         self.is_started = True
 
     async def stop(self, *, commit: bool = True):
         if commit:
-            await gather(*[consumer.commit() for consumer in self.consumers])
+            async with asyncio.TaskGroup() as tg:
+                for consumer in self.consumers:
+                    tg.create_task(consumer.commit())
 
-        await gather(*[consumer.stop() for consumer in self.consumers])
+        async with asyncio.TaskGroup() as tg:
+            for consumer in self.consumers:
+                tg.create_task(consumer.stop())
         self.is_started = False
 
     def __iter__(self):

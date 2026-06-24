@@ -3,7 +3,7 @@ name = "muffin-kafka"
 version = "2.3.0"
 description = "Kafka Integration for Muffin framework"
 authors = [{ name = "Kirill Klenov", email = "horneds@gmail.com" }]
-requires-python = ">=3.10,<4"
+requires-python = ">=3.11,<4"
 readme = "README.md"
 license = "MIT"
 keywords = ["kafka", "asyncio", "asgi", "muffin"]
@@ -13,7 +13,6 @@ classifiers = [
   "License :: OSI Approved :: MIT License",
   "Programming Language :: Python",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
@@ -48,7 +47,7 @@ log_cli = true
 [tool.tox]
 legacy_tox_ini = """
 [tox]
-envlist = py310,py311,py312,py313,py314,pypy311
+envlist = py311,py312,py313,py314,pypy311
 
 [testenv]
 deps = -e .[tests]
@@ -60,7 +59,7 @@ commands =
 include = ["muffin-kafka/*.py"]
 fix = true
 line-length = 100
-target-version = "py310"
+target-version = "py311"
 exclude = [".venv", "docs", "examples"]
 
 [tool.ruff.lint]
@@ -68,6 +67,7 @@ select = ["ALL"]
 ignore = [
   "A003",
   "ANN",
+  "COM812",
   "D",
   "DJ",
   "EM",
