@@ -31,7 +31,7 @@ class KafkaPlugin(BasePlugin):
         "setup_commands": True,  # Register management commands
         #
         # Kafka connection parameters
-        "bootstrap_servers": "localhost:9092",
+        "bootstrap_servers": ["localhost:9092"],
         "client_id": "muffin",
         "request_timeout_ms": 30000,
         "retry_backoff_ms": 1000,
