@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Mapping
+from unittest import mock
 
-from aiokafka import AIOKafkaProducer, helpers
+from aiokafka import AIOKafkaConsumer, AIOKafkaProducer, helpers
 from asgi_tools._compat import json_dumps
 from muffin.plugins import BasePlugin, PluginError
 
@@ -116,7 +118,7 @@ class KafkaPlugin(BasePlugin):
             *topics: str,
             group_id: str | None = None,
             monitor: bool = True,
-            batch_size: int = 0,
+            batch_size: int | str = 0,
         ):
             """Start listening to Kafka topics.
 
@@ -228,3 +230,18 @@ class KafkaPlugin(BasePlugin):
 
         self.handlers.set_error_handler(fn)
         return fn
+
+    @asynccontextmanager
+    async def conftest(self):
+        """Disable actual Kafka broker connections during tests."""
+
+        async def _noop(self):
+            pass
+
+        with (
+            mock.patch.object(AIOKafkaProducer, "start", _noop),
+            mock.patch.object(AIOKafkaProducer, "stop", _noop),
+            mock.patch.object(AIOKafkaConsumer, "start", _noop),
+            mock.patch.object(AIOKafkaConsumer, "stop", _noop),
+        ):
+            yield self
