@@ -189,6 +189,40 @@ class TestListen:
         assert mock_logger_class.call_args.kwargs["interval"] == 30
 
 
+class TestConsumerPoolInit:
+    """Tests for ConsumerPool.init — per-topic consumer creation."""
+
+    async def test_creates_one_consumer_per_missing_topic(self, kafka: KafkaPlugin):
+        kafka.consumer_pool.setup(group_id="g", bootstrap_servers="kafka:9092")
+
+        with patch(
+            "muffin_kafka.consumers.pool.AIOKafkaConsumer",
+            return_value=MagicMock(),
+        ) as mock_class:
+            kafka.consumer_pool.init("events", "alerts")
+
+        assert mock_class.call_count == 2
+        # each consumer gets exactly one topic
+        calls = {c.args[0] for c in mock_class.call_args_list}
+        assert calls == {"events", "alerts"}
+
+    async def test_skips_topics_already_consumed(self, kafka: KafkaPlugin):
+        existing = MagicMock()
+        existing._client._topics = {"events"}
+        kafka.consumer_pool.consumers.append(existing)
+        kafka.consumer_pool.setup(group_id="g", bootstrap_servers="kafka:9092")
+
+        with patch(
+            "muffin_kafka.consumers.pool.AIOKafkaConsumer",
+            return_value=MagicMock(),
+        ) as mock_class:
+            kafka.consumer_pool.init("events", "alerts")
+
+        # only "alerts" is missing → one new consumer
+        mock_class.assert_called_once()
+        assert mock_class.call_args.args == ("alerts",)
+
+
 class TestShutdown:
     """Tests for the shutdown() method."""
 

@@ -21,8 +21,8 @@ class ConsumerPool:
         for consumer in self.consumers:
             missing -= set(consumer._client._topics)
 
-        if missing:
-            consumer = self.init_consumer(*missing, **params)
+        for topic in missing:
+            consumer = self.init_consumer(topic, **params)
             self.consumers.append(consumer)
 
     def init_consumer(self, *topics: str, **params) -> AIOKafkaConsumer:
