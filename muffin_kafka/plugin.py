@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Mapping
 from unittest import mock
 
@@ -50,11 +50,18 @@ class KafkaPlugin(BasePlugin):
         "max_poll_records": None,
     }
 
-    def __init__(self, app: Application | None = None, **kwargs):
+    def __init__(
+        self,
+        app: Application | None = None,
+        *,
+        context: AbstractAsyncContextManager | None = None,
+        **kwargs,
+    ):
         self.runner: PoolRunner | None = None
         self.producer: AIOKafkaProducer | None = None
         self.handlers = ConsumerHandlers()
         self.consumer_pool = ConsumerPool()
+        self.context = context
 
         super().__init__(app, **kwargs)
 
@@ -127,8 +134,9 @@ class KafkaPlugin(BasePlugin):
             # If the plugin is not started yet, we need to start it before listening
             await self.listen(
                 *topics,
-                group_id=group_id,
                 monitor=monitor,
+                group_id=group_id,
+                context=self.context,
                 batch_size=int(batch_size),
             )
 
@@ -173,6 +181,7 @@ class KafkaPlugin(BasePlugin):
         *only: str,
         monitor: bool | None = None,
         batch_size: int | None = None,
+        context: AbstractAsyncContextManager | None = None,
         **params: Any,
     ):
         """Start listening to Kafka topics.
@@ -198,7 +207,7 @@ class KafkaPlugin(BasePlugin):
         )
         should_monitor = self.cfg.monitor if monitor is None else monitor
         monitor_interval = self.cfg.monitor_interval if should_monitor else None
-        await self.runner.start(monitor_interval)
+        await self.runner.start(monitor_interval, context=context)
 
     async def send(self, topic: str, value: Any, key=None, **params):
         """Send a value to Kafka topic."""

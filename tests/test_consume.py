@@ -1,7 +1,9 @@
+import asyncio
 from asyncio import Future
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from aiokafka.errors import ConsumerStoppedError
 
 from muffin_kafka.consumers import ConsumerHandlers, ConsumerPool
 from muffin_kafka.consumers.runner import BatchPoolRunner, SinglePoolRunner
@@ -126,7 +128,7 @@ class TestListen:
                 "muffin_kafka.consumers.runner.create_task",
                 side_effect=lambda c: (c.close(), MagicMock())[1],
             ),
-            patch("muffin_kafka.consumers.runner.gather", return_value=done_future),
+            patch("asyncio.gather", return_value=done_future),
         ):
             await kafka.app.manage.commands["kafka-listen"]("events", monitor=False, batch_size=5)
 
@@ -151,7 +153,7 @@ class TestListen:
                 "muffin_kafka.consumers.runner.create_task",
                 side_effect=lambda c: (c.close(), MagicMock())[1],
             ),
-            patch("muffin_kafka.consumers.runner.gather", return_value=done_future),
+            patch("asyncio.gather", return_value=done_future),
         ):
             await kafka.app.manage.commands["kafka-listen"]("events", monitor=False, batch_size="5")
 
@@ -181,7 +183,7 @@ class TestListen:
                 "muffin_kafka.consumers.runner.ConsumerPoolLogger",
                 return_value=logger_mock,
             ) as mock_logger_class,
-            patch("muffin_kafka.consumers.runner.gather", return_value=done_future),
+            patch("asyncio.gather", return_value=done_future),
         ):
             await kafka.app.manage.commands["kafka-listen"]("events")
 
@@ -351,3 +353,37 @@ class TestRunner:
 
         assert len(handler_calls) == 1
         assert len(error_calls) == 1
+
+    async def test_context_manager_wraps_consumer_loop(self):
+        call_order = []
+
+        class Tracker:
+            async def __aenter__(self):
+                call_order.append("enter")
+
+            async def __aexit__(self, *args):
+                call_order.append("exit")
+
+        mock_consumer = AsyncMock()
+        # one message, then stop
+        mock_consumer.getone = AsyncMock(
+            side_effect=[MagicMock(topic="events"), ConsumerStoppedError()],
+        )
+        pool = ConsumerPool()
+        pool.consumers = [mock_consumer]
+        handlers = ConsumerHandlers()
+        handler_calls = []
+
+        async def handler(msg):
+            handler_calls.append(msg)
+
+        handlers.set_handler(handler, "events")
+
+        runner = SinglePoolRunner(pool=pool, handlers=handlers)
+        await runner.start(context=Tracker())
+
+        # let the task run to completion
+        await asyncio.gather(*runner.tasks, return_exceptions=True)
+
+        assert call_order == ["enter", "exit"]
+        assert len(handler_calls) == 1
