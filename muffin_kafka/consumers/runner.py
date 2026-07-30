@@ -1,6 +1,7 @@
 import abc
 import asyncio
 import dataclasses as dc
+from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, nullcontext
 from typing import Coroutine
 
@@ -22,13 +23,15 @@ class PoolRunner(abc.ABC):
 
     def __post_init__(self):
         self._stop_event: asyncio.Event = asyncio.Event()
-        self._context: AbstractAsyncContextManager = nullcontext()
+        self._context_factory: Callable[[], AbstractAsyncContextManager] = nullcontext
 
     async def start(
-        self, monitor: int | None = None, context: AbstractAsyncContextManager | None = None
+        self,
+        monitor: int | None = None,
+        context: Callable[[], AbstractAsyncContextManager] | None = None,
     ):
         if context is not None:
-            self._context = context
+            self._context_factory = context
 
         await self.pool.start()
 
@@ -64,7 +67,7 @@ class PoolRunner(abc.ABC):
             logger.exception("Kafka task error")
 
     async def run_consumer(self, consumer):
-        async with self._context:
+        async with self._context_factory():
             await self._run_consumer(consumer)
 
     @abc.abstractmethod

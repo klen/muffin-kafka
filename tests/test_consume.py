@@ -380,7 +380,7 @@ class TestRunner:
         handlers.set_handler(handler, "events")
 
         runner = SinglePoolRunner(pool=pool, handlers=handlers)
-        await runner.start(context=Tracker())
+        await runner.start(context=Tracker)
 
         # let the task run to completion
         await asyncio.gather(*runner.tasks, return_exceptions=True)

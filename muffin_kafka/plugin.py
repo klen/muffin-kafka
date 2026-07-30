@@ -54,7 +54,7 @@ class KafkaPlugin(BasePlugin):
         self,
         app: Application | None = None,
         *,
-        context: AbstractAsyncContextManager | None = None,
+        context: Callable[[], AbstractAsyncContextManager] | None = None,
         **kwargs,
     ):
         self.runner: PoolRunner | None = None
@@ -181,7 +181,7 @@ class KafkaPlugin(BasePlugin):
         *only: str,
         monitor: bool | None = None,
         batch_size: int | None = None,
-        context: AbstractAsyncContextManager | None = None,
+        context: Callable[[], AbstractAsyncContextManager] | None = None,
         **params: Any,
     ):
         """Start listening to Kafka topics.
