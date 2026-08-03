@@ -80,13 +80,17 @@ class PoolRunner(abc.ABC):
 
 class SinglePoolRunner(PoolRunner):
     async def _run_consumer(self, consumer: AIOKafkaConsumer):
-        while not self._stop_event.is_set():
+        stop = self._stop_event
+        handlers = self.handlers
+
+        while not stop.is_set():
             try:
                 msg = await consumer.getone()
             except ConsumerStoppedError:
                 break
-            await self.handlers(msg)
-            if not self.enable_auto_commit:
+
+            success = await handlers(msg)
+            if success and not self.enable_auto_commit:
                 await consumer.commit()
 
 
@@ -95,13 +99,20 @@ class BatchPoolRunner(PoolRunner):
     batch_size: int = dc.field(default=100)
 
     async def _run_consumer(self, consumer: AIOKafkaConsumer):
-        while not self._stop_event.is_set():
+        stop = self._stop_event
+        handlers = self.handlers
+
+        while not stop.is_set():
             try:
                 data = await consumer.getmany(timeout_ms=100, max_records=self.batch_size)
             except ConsumerStoppedError:
                 break
+
+            success = True
             for messages in data.values():
                 for msg in messages:
-                    await self.handlers(msg)
-            if not self.enable_auto_commit:
+                    if not await handlers(msg):
+                        success = False
+
+            if success and not self.enable_auto_commit:
                 await consumer.commit()

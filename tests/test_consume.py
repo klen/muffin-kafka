@@ -387,3 +387,156 @@ class TestRunner:
 
         assert call_order == ["enter", "exit"]
         assert len(handler_calls) == 1
+
+    async def test_single_runner_commits_on_success(self, kafka: KafkaPlugin, mock_messages):
+        msg1, msg2 = mock_messages
+        handler_calls = await self.register_handler(kafka)
+
+        mock_consumer = AsyncMock()
+        mock_consumer.commit = AsyncMock()
+        call_count = 0
+
+        async def getone_side():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return msg1
+            if call_count == 2:
+                return msg2
+            raise RuntimeError("stopped")
+
+        mock_consumer.getone = AsyncMock(side_effect=getone_side)
+        pool = ConsumerPool()
+        pool.consumers = [mock_consumer]
+
+        runner = SinglePoolRunner(
+            pool=pool,
+            handlers=kafka.handlers,
+            enable_auto_commit=False,
+        )
+
+        with pytest.raises(RuntimeError, match="stopped"):
+            await runner.run_consumer(mock_consumer)
+
+        assert mock_consumer.commit.await_count == 2
+        assert len(handler_calls) == 2
+
+    async def test_single_runner_skips_commit_on_failure(self, kafka: KafkaPlugin, mock_messages):
+        msg1, msg2 = mock_messages
+        fail = True
+
+        @kafka.handle_topics("events")
+        async def handler(message):
+            if fail:
+                raise RuntimeError("handler error")
+
+        mock_consumer = AsyncMock()
+        mock_consumer.commit = AsyncMock()
+        call_count = 0
+
+        async def getone_side():
+            nonlocal call_count, fail
+            call_count += 1
+            if call_count == 1:
+                return msg1  # this one will fail
+            if call_count == 2:
+                fail = False
+                return msg2  # this one succeeds
+            raise RuntimeError("stopped")
+
+        mock_consumer.getone = AsyncMock(side_effect=getone_side)
+        pool = ConsumerPool()
+        pool.consumers = [mock_consumer]
+
+        runner = SinglePoolRunner(
+            pool=pool,
+            handlers=kafka.handlers,
+            enable_auto_commit=False,
+        )
+
+        with pytest.raises(RuntimeError, match="stopped"):
+            await runner.run_consumer(mock_consumer)
+
+        # Only the second message (success) should be committed
+        assert mock_consumer.commit.await_count == 1
+
+    @pytest.mark.parametrize("options", [{"batch_size": 10}])
+    async def test_batch_runner_commits_on_success(self, kafka: KafkaPlugin, mock_messages):
+        msg1, msg2 = mock_messages
+        handler_calls = await self.register_handler(kafka)
+
+        mock_consumer = AsyncMock()
+        mock_consumer.commit = AsyncMock()
+        tp = MagicMock()
+        call_count = 0
+
+        async def getmany_side(**kwargs):
+            nonlocal call_count
+            del kwargs
+            call_count += 1
+            if call_count == 1:
+                return {tp: [msg1, msg2]}
+            raise RuntimeError("stopped")
+
+        mock_consumer.getmany = AsyncMock(side_effect=getmany_side)
+        pool = ConsumerPool()
+        pool.consumers = [mock_consumer]
+
+        runner = BatchPoolRunner(
+            pool=pool,
+            handlers=kafka.handlers,
+            enable_auto_commit=False,
+            batch_size=10,
+        )
+
+        with pytest.raises(RuntimeError, match="stopped"):
+            await runner.run_consumer(mock_consumer)
+
+        assert mock_consumer.commit.await_count == 1
+        assert len(handler_calls) == 2
+
+    @pytest.mark.parametrize("options", [{"batch_size": 10}])
+    async def test_batch_runner_skips_commit_on_any_failure(
+        self,
+        kafka: KafkaPlugin,
+        mock_messages,
+    ):
+        msg1, msg2 = mock_messages
+        handler_calls = []
+
+        @kafka.handle_topics("events")
+        async def handler(message):
+            handler_calls.append(message)
+            if message == msg1:
+                raise RuntimeError("handler error")
+
+        mock_consumer = AsyncMock()
+        mock_consumer.commit = AsyncMock()
+        tp = MagicMock()
+        call_count = 0
+
+        async def getmany_side(**kwargs):
+            nonlocal call_count
+            del kwargs
+            call_count += 1
+            if call_count == 1:
+                return {tp: [msg1, msg2]}
+            raise RuntimeError("stopped")
+
+        mock_consumer.getmany = AsyncMock(side_effect=getmany_side)
+        pool = ConsumerPool()
+        pool.consumers = [mock_consumer]
+
+        runner = BatchPoolRunner(
+            pool=pool,
+            handlers=kafka.handlers,
+            enable_auto_commit=False,
+            batch_size=10,
+        )
+
+        with pytest.raises(RuntimeError, match="stopped"):
+            await runner.run_consumer(mock_consumer)
+
+        # Both messages processed, but commit skipped because msg1 failed
+        assert len(handler_calls) == 2
+        mock_consumer.commit.assert_not_awaited()

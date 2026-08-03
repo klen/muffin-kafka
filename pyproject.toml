@@ -66,6 +66,7 @@ exclude = [".venv", "docs", "examples"]
 select = ["ALL"]
 ignore = [
   "A003",
+  "ARG",
   "ANN",
   "COM812",
   "D",

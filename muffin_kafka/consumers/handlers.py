@@ -27,12 +27,18 @@ class ConsumerHandlers:
     def set_error_handler(self, handler: TErrCallable):
         self.error_handler = handler
 
-    async def __call__(self, msg: ConsumerRecord):
+    async def __call__(self, msg: ConsumerRecord) -> bool:
         logger.debug("Kafka msg: %s-%s-%s", msg.topic, msg.partition, msg.offset)
+        success = True
+
         for fn in self.handlers[msg.topic]:
             try:
                 await fn(msg)
-            except Exception as exc:  # noqa: PERF203, BLE001
+
+            except Exception as exc:  # noqa: BLE001
+                success = False
                 logger.exception("Kafka: Error while processing message: %r", msg)
                 if self.error_handler:
                     await self.error_handler(exc)
+
+        return success
