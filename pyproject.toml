@@ -69,6 +69,7 @@ ignore = [
   "ARG",
   "ANN",
   "COM812",
+  "CPY",
   "D",
   "DJ",
   "EM",

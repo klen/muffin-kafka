@@ -3,6 +3,8 @@ import dataclasses as dc
 
 from aiokafka.consumer.consumer import AIOKafkaConsumer
 
+from .utils import safe_commit
+
 
 @dc.dataclass
 class ConsumerPool:
@@ -40,7 +42,7 @@ class ConsumerPool:
         if commit:
             async with asyncio.TaskGroup() as tg:
                 for consumer in self.consumers:
-                    tg.create_task(consumer.commit())
+                    tg.create_task(safe_commit(consumer))
 
         async with asyncio.TaskGroup() as tg:
             for consumer in self.consumers:

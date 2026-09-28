@@ -10,7 +10,7 @@ from aiokafka.errors import ConsumerStoppedError
 from aiokafka.util import create_task
 
 from muffin_kafka import logger
-from muffin_kafka.consumers import ConsumerPool, ConsumerPoolLogger
+from muffin_kafka.consumers import ConsumerPool, ConsumerPoolLogger, safe_commit
 from muffin_kafka.consumers.handlers import ConsumerHandlers
 
 
@@ -91,7 +91,7 @@ class SinglePoolRunner(PoolRunner):
 
             success = await handlers(msg)
             if success and not self.enable_auto_commit:
-                await consumer.commit()
+                await safe_commit(consumer)
 
 
 @dc.dataclass
@@ -115,4 +115,4 @@ class BatchPoolRunner(PoolRunner):
                         success = False
 
             if success and not self.enable_auto_commit:
-                await consumer.commit()
+                await safe_commit(consumer)

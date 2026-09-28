@@ -3,7 +3,7 @@ from asyncio import Future
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from aiokafka.errors import ConsumerStoppedError
+from aiokafka.errors import CommitFailedError, ConsumerStoppedError
 
 from muffin_kafka.consumers import ConsumerHandlers, ConsumerPool
 from muffin_kafka.consumers.runner import BatchPoolRunner, SinglePoolRunner
@@ -540,3 +540,97 @@ class TestRunner:
         # Both messages processed, but commit skipped because msg1 failed
         assert len(handler_calls) == 2
         mock_consumer.commit.assert_not_awaited()
+
+    async def test_single_runner_tolerates_commit_failure(
+        self,
+        kafka: KafkaPlugin,
+        mock_messages,
+    ):
+        msg1, msg2 = mock_messages
+        handler_calls = await self.register_handler(kafka)
+
+        mock_consumer = AsyncMock()
+        mock_consumer.commit = AsyncMock(side_effect=[CommitFailedError(), None])
+        call_count = 0
+
+        async def getone_side():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return msg1
+            if call_count == 2:
+                return msg2
+            raise RuntimeError("stopped")
+
+        mock_consumer.getone = AsyncMock(side_effect=getone_side)
+        pool = ConsumerPool()
+        pool.consumers = [mock_consumer]
+
+        runner = SinglePoolRunner(
+            pool=pool,
+            handlers=kafka.handlers,
+            enable_auto_commit=False,
+        )
+
+        with pytest.raises(RuntimeError, match="stopped"):
+            await runner.run_consumer(mock_consumer)
+
+        # The rebalance on the first commit did not break the loop: the next
+        # message was handled and committed on the fresh generation.
+        assert len(handler_calls) == 2
+        assert mock_consumer.commit.await_count == 2
+
+    @pytest.mark.parametrize("options", [{"batch_size": 10}])
+    async def test_batch_runner_tolerates_commit_failure(
+        self,
+        kafka: KafkaPlugin,
+        mock_messages,
+    ):
+        msg1, msg2 = mock_messages
+        handler_calls = await self.register_handler(kafka)
+
+        mock_consumer = AsyncMock()
+        mock_consumer.commit = AsyncMock(side_effect=[CommitFailedError(), None])
+        tp = MagicMock()
+        call_count = 0
+
+        async def getmany_side(**kwargs):
+            nonlocal call_count
+            del kwargs
+            call_count += 1
+            if call_count == 1:
+                return {tp: [msg1]}
+            if call_count == 2:
+                return {tp: [msg2]}
+            raise RuntimeError("stopped")
+
+        mock_consumer.getmany = AsyncMock(side_effect=getmany_side)
+        pool = ConsumerPool()
+        pool.consumers = [mock_consumer]
+
+        runner = BatchPoolRunner(
+            pool=pool,
+            handlers=kafka.handlers,
+            enable_auto_commit=False,
+            batch_size=10,
+        )
+
+        with pytest.raises(RuntimeError, match="stopped"):
+            await runner.run_consumer(mock_consumer)
+
+        assert len(handler_calls) == 2
+        assert mock_consumer.commit.await_count == 2
+
+
+class TestConsumerPoolStop:
+    """Tests for ConsumerPool.stop — commit failures must not abort shutdown."""
+
+    async def test_stop_tolerates_commit_failure(self, mock_consumer):
+        mock_consumer.commit = AsyncMock(side_effect=CommitFailedError())
+        pool = ConsumerPool()
+        pool.consumers = [mock_consumer]
+
+        await pool.stop()
+
+        mock_consumer.commit.assert_awaited_once()
+        mock_consumer.stop.assert_awaited_once()

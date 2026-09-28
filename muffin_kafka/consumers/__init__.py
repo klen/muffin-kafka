@@ -5,6 +5,7 @@ from muffin_kafka.consumers.monitors import (
     ConsumerPoolMonitor,
 )
 from muffin_kafka.consumers.pool import ConsumerPool
+from muffin_kafka.consumers.utils import safe_commit
 
 __all__ = [
     "ConsumerHandlers",
@@ -14,4 +15,5 @@ __all__ = [
     "ConsumerPoolMonitor",
     "TCallable",
     "TErrCallable",
+    "safe_commit",
 ]
