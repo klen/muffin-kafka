@@ -56,7 +56,7 @@ commands =
 """
 
 [tool.ruff]
-include = ["muffin-kafka/*.py"]
+include = ["muffin_kafka/*.py", "tests/*.py"]
 fix = true
 line-length = 100
 target-version = "py311"
