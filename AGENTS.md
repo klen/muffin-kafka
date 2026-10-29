@@ -1,20 +1,22 @@
 # AGENTS.md
 
 - Language: Python, Packaging: UV (`pyproject.toml`)
-- Runtime: Python 3.11+, Main package: `muffin_kafka`
+- Runtime: Python 3.11+; CI runs 3.11–3.14 (`.github/workflows/tests.yml`), the package has no upper bound.
 - Tests: `tests/`, CI: `.github/workflows/tests.yml`
 
 ## Commands
 
 ```bash
 make t           # run tests
-make types       # type check
+make types       # type check (pyrefly)
 uv run ruff      # lint
 uv run ruff check --fix  # auto-fix
+uv run pytest    # run all tests
 ```
 
 - CI matrix: 3.11–3.14.
     Runs on pushes/PRs to `main` and `develop`.
+- README.md is the only documentation (no mkdocs site).
 
 ## Code Style
 
@@ -28,10 +30,20 @@ uv run ruff check --fix  # auto-fix
 
 ## Kafka Patterns
 
-- Feature flags: `produce`, `listen`, `monitor`.
+- Feature flags: `produce` (default `False`), `listen` (default `True`), `monitor`
+  (default `False`).
 - Encode keys/values before `send`.
     Keep handler registration explicit.
-- Healthcheck fails closed (return `False` on uncertainty).
+- Consumer pool: one `AIOKafkaConsumer` per topic, one asyncio task per consumer.
+    `SinglePoolRunner` uses `getone()`, `BatchPoolRunner` uses `getmany()` and is selected by a
+    truthy `batch_size`.
+- Offsets: with `enable_auto_commit=False` the runner commits only after successful handling,
+    and `commit()` stores the current position. A later success therefore commits past a failed
+    record; see the README for the exact semantics.
+- A pool/consumer can be started once; a second start raises `AssertionError` in aiokafka.
+- Healthcheck currently fails open (an unstarted pool, no consumers or no assignments count as
+    healthy), do not use the CLI command as a liveness probe.
+- Monitors: only `ConsumerPoolLogger` is wired into the runner; custom monitors are run by the user.
 
 ## Testing
 
