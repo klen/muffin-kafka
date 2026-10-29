@@ -40,9 +40,11 @@ uv run pytest    # run all tests
 - Offsets: with `enable_auto_commit=False` the runner commits only after successful handling,
     and `commit()` stores the current position. A later success therefore commits past a failed
     record; see the README for the exact semantics.
-- A pool/consumer can be started once; a second start raises `AssertionError` in aiokafka.
-- Healthcheck currently fails open (an unstarted pool, no consumers or no assignments count as
-    healthy), do not use the CLI command as a liveness probe.
+- A pool/runner start is idempotent: `ConsumerPool.start()` does nothing when already started and
+    `KafkaPlugin.listen()` returns the running runner. `stop()` then `start()` again still needs fresh
+    aiokafka consumers (restart the process or build a new pool).
+- Healthcheck fails closed: `process()` returns `False` when nothing could be inspected (pool not
+    started or no assigned partitions) and the command exits `1`.
 - Monitors: only `ConsumerPoolLogger` is wired into the runner; custom monitors are run by the user.
 
 ## Testing

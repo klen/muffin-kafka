@@ -268,11 +268,12 @@ The monitor interval comes from the `monitor_interval` config option; there is n
 `--monitor-interval` CLI flag.
 
 The command runs inside the application lifespan, so `plugin.startup()` executes first.
-With the default `listen=True` that already starts the consumers, and the command then
-starts the same consumers a second time. aiokafka rejects a second `start()` with
-``AssertionError("Did you call `start` twice?")``. When you run consumers with this command,
-set `listen=False` (for example `KAFKA_LISTEN=false`) in the process that runs it; leave
-`listen=True` only when the application itself should consume in-process.
+With the default `listen=True` that already starts the consumers. `listen()` is
+idempotent, so the command reuses the running runner instead of starting the consumers a
+second time; in that case the command options (`topics`, `--group-id`, `--batch-size`,
+`--no-monitor`) are ignored, because the runner already exists. Set `listen=False` (for
+example `KAFKA_LISTEN=false`) when the command should own the consumers and honor its
+options.
 
 If no topics are given and no handlers are registered, there is nothing to consume: the
 command starts an empty runner and exits immediately.
@@ -284,30 +285,37 @@ muffin example kafka-healthcheck                         # registered topics, ma
 muffin example kafka-healthcheck events.user --max-lag=500
 ```
 
+The command starts a temporary consumer pool when the plugin is not consuming in this
+process (`init(topics)` then `start()`), runs the check and stops that pool with
+`commit=False`. The plugin's own pool is left untouched, so the command can run
+repeatedly. When the plugin is already consuming in this process, the running pool is
+reused and left running.
+
 The check reads the latest offset (`end_offsets`) and the committed offset of every
 partition assigned to a started consumer and compares `end_offset - committed` with
 `max_lag`. A missing committed offset counts as `0`, and the comparison is strict, so a
-partition is unhealthy only when `lag > max_lag`. The command raises `SystemExit(1)` when
-at least one partition is unhealthy and exits with `0` otherwise.
+partition is unhealthy only when `lag > max_lag`. The command exits with `1` when at least
+one partition is unhealthy and also when the check could not be performed at all: no
+consumer has an assigned partition (nothing to inspect). A successful check exits with
+`0`.
 
-Two caveats in the current implementation:
-
-- The command does not use the application lifespan, so the consumer pool is never
-  started. `ConsumerPoolHealthcheck.process()` logs `Consumer pool is not started` and
-  returns with `is_healthy = True`, so the CLI command always exits `0`.
-- Consumers without an assignment, and a pool with no consumers at all, also count as
-  healthy.
-
-A meaningful check therefore has to run inside a process where the pool is consuming:
+`ConsumerPoolHealthcheck.process()` returns whether anything was inspected, so code that
+runs the check itself has to test both results:
 
 ```python
 from muffin_kafka.consumers import ConsumerPoolHealthcheck
 
 async def kafka_is_healthy(max_lag: int = 1000) -> bool:
     healthcheck = ConsumerPoolHealthcheck(kafka.consumer_pool, max_lag=max_lag)
-    await healthcheck.process()
-    return bool(healthcheck)
+    performed = await healthcheck.process()
+    return performed and bool(healthcheck)
 ```
+
+Keep in mind that the healthcheck consumer joins the configured `group_id`: running the
+command from a separate process triggers a group rebalance and only inspects the
+partitions assigned to that temporary consumer. Partitions handled by other group members
+are not examined. A check where no consumer got an assignment at all (for example while a
+rebalance is in progress) counts as failed, not as healthy.
 
 ## Monitoring
 
@@ -356,10 +364,10 @@ async def monitor_loop():
 ```
 
 Start `monitor_loop()` as a task after `kafka.listen()` (or from your own
-`on_startup`), and cancel it on shutdown. `process()` skips everything while the pool is
-not started, so a monitor created before startup simply does nothing. For a logger-style
-loop you can subclass `ConsumerPoolLogger` (it implements `process_tp` and a `__call__`
-loop) and await the instance.
+`on_startup`), and cancel it on shutdown. `process()` returns `False` and does nothing
+while the pool is not started, so a monitor created before startup simply reports that it
+could not check. For a logger-style loop you can subclass `ConsumerPoolLogger` (it
+implements `process_tp` and a `__call__` loop) and await the instance.
 
 ## Configuration
 
@@ -417,7 +425,7 @@ To pass extra aiokafka consumer options (for example `session_timeout_ms`,
 | `kafka.runner` | Active `PoolRunner`, or `None` before `listen()`. |
 | `kafka.setup(app, **options)` | Bind the app, register commands, configure the pool. |
 | `kafka.startup()` / `kafka.shutdown()` | Plugin lifecycle hooks (called by Muffin). |
-| `kafka.listen(*topics, monitor=None, batch_size=None, context=None, **params)` | Create consumers and start a runner. |
+| `kafka.listen(*topics, monitor=None, batch_size=None, context=None, **params)` | Create consumers and start a runner; returns it and reuses the running runner on repeated calls. |
 | `kafka.send(topic, value, key=None, **params)` | Publish a message; returns aiokafka's delivery future. |
 | `kafka.handle_topics(*topics)` | Decorator registering a message handler. |
 | `kafka.handle_error(fn)` | Decorator registering the global error handler. |
@@ -440,13 +448,13 @@ Import from `muffin_kafka.consumers`:
 
 | Class | Description |
 | ----- | ----------- |
-| `ConsumerPool` | One consumer per topic. Lifecycle: `setup(group_id, **params)` → `init(*topics, **params)` / `init_consumer(*topics, **params)` → `start()` → `stop(commit=True)`. `init()` skips topics that an existing consumer already subscribes to. |
+| `ConsumerPool` | One consumer per topic. Lifecycle: `setup(group_id, **params)` → `init(*topics, **params)` / `init_consumer(*topics, **params)` → `start()` → `stop(commit=True)`. `init()` skips topics that an existing consumer already subscribes to; `start()` is idempotent. |
 | `SinglePoolRunner` | `getone()` loop, commit after each successful record. |
 | `BatchPoolRunner` | `getmany()` loop, commit once per successful batch; handlers still get single records. |
 | `ConsumerHandlers` | Topic → handlers mapping used by the runners. |
-| `ConsumerPoolMonitor` | Base monitor: `process()` → `process_consumer()` → `process_tp()` per assigned partition. |
+| `ConsumerPoolMonitor` | Base monitor: `process()` returns whether any assigned partition was inspected, via `process_consumer()` and `process_tp()`. |
 | `ConsumerPoolLogger` | Monitor that logs offsets, lag and poll delay; `__call__(interval)` is the loop task. |
-| `ConsumerPoolHealthcheck` | Monitor that sets `is_healthy = False` when `lag > max_lag`; truth-test the instance. |
+| `ConsumerPoolHealthcheck` | Monitor that sets `is_healthy = False` when `lag > max_lag`; `process()` returns `False` when nothing could be checked, so test both. |
 | `safe_commit(consumer)` | `consumer.commit()` that ignores `CommitFailedError` after a rebalance. |
 
 `PoolRunner` itself is the extension point for a different fetching strategy: subclass it
@@ -457,9 +465,11 @@ for a per-consumer DB session).
 
 ## Limitations and troubleshooting
 
-- The consumer pool can be started once. A second `listen()` for the same topics, calling
-  `plugin.listen()` twice, or `plugin.restart()` all end in aiokafka's
-  ``AssertionError("Did you call `start` twice?")``. Restart the process instead.
+- `listen()` is idempotent: a second call returns the running runner and ignores its
+  arguments. To consume different topics or switch batch mode, restart the process.
+  `plugin.restart()` still cannot revive aiokafka consumers that were stopped (`start()`
+  after `stop()` asserts inside aiokafka), so use a fresh process or a fresh
+  `ConsumerPool`.
 - `enable_auto_commit=False` without `group_id` crashes the consumer task on the first
   successful commit (`IllegalOperation`). Set a `group_id`, or switch auto-commit on.
 - A failed record does not stop the consumer, but it is not retried per message: the next
@@ -469,14 +479,14 @@ for a per-consumer DB session).
   keep consuming; `kafka-listen` exits when the runner's tasks finish or raise.
 - `stop()` commits before cancelling the tasks. A handler still running at shutdown may
   have its offset committed, so in-flight work can be lost on a graceful stop.
-- `kafka-healthcheck` from the CLI always reports healthy because the pool is not started
-  in that process. Run the check inside a consuming application instead.
+- `kafka-healthcheck` joins the configured consumer group, so it triggers a rebalance and
+  only inspects the partitions assigned to that temporary consumer. A pool without any
+  assigned partition is reported as a failed check (exit code 1).
 - The built-in monitor is the only configurable one; custom monitors must be instantiated
   and scheduled manually.
 - `max_poll_records` does not limit reads in this plugin; use `batch_size`.
 - Messages for a listened topic without handlers are committed and silently discarded.
-- With `produce=False` (default) `send()` raises `PluginError`; with `listen=True` and the
-  `kafka-listen` command in the same process the consumers are started twice.
+- With `produce=False` (default) `send()` raises `PluginError`.
 
 ## Bug Tracker
 
