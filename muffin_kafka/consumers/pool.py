@@ -57,10 +57,12 @@ class ConsumerPool:
     async def start(self):
         """Connect every consumer to the cluster and mark the pool as started.
 
-        A failure raises ``ExceptionGroup`` and leaves ``is_started`` false.
-        Starting the same pool twice starts the same consumers again, which
-        aiokafka rejects with an ``AssertionError``.
+        Idempotent: a pool that is already started is left untouched. A failure
+        raises ``ExceptionGroup`` and leaves ``is_started`` false.
         """
+        if self.is_started:
+            return
+
         async with asyncio.TaskGroup() as tg:
             for consumer in self.consumers:
                 tg.create_task(consumer.start())

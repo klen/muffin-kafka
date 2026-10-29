@@ -10,6 +10,7 @@ from aiokafka import AIOKafkaConsumer, AIOKafkaProducer, helpers
 from asgi_tools._compat import json_dumps
 from muffin.plugins import BasePlugin, PluginError
 
+from muffin_kafka import logger
 from muffin_kafka.consumers import (
     ConsumerHandlers,
     ConsumerPool,
@@ -179,7 +180,7 @@ class KafkaPlugin(BasePlugin):
             param monitor: Start the consumer monitor log task (use --no-monitor to disable).
             param batch_size: Read messages in batches of this size (0 keeps single mode).
             """
-            # If the plugin is not started yet, we need to start it before listening
+            # Idempotent: reuses the runner started by plugin.startup() (listen=True)
             await self.listen(
                 *topics,
                 monitor=monitor,
@@ -234,7 +235,7 @@ class KafkaPlugin(BasePlugin):
         batch_size: int | None = None,
         context: Callable[[], AbstractAsyncContextManager] | None = None,
         **params: Any,
-    ):
+    ) -> PoolRunner:
         """Start consuming messages from ``only`` topics (all registered topics if empty).
 
         Creates one consumer per topic (``consumer_pool.init``) and starts a
@@ -244,14 +245,18 @@ class KafkaPlugin(BasePlugin):
         ``context`` is a callable returning an async context manager wrapped
         around each per-consumer loop; ``**params`` go to ``AIOKafkaConsumer``.
 
-        Consumers are started here, so calling this twice for the same topics
-        starts them twice, which aiokafka rejects. Use one entry point per
-        process (see the README on ``listen=True`` and ``kafka-listen``).
+        Idempotent: when the consumers are already running, the existing runner
+        is returned and the arguments are ignored. Call ``stop()`` first to
+        restart with different options.
         """
+        if self.runner is not None and self.consumer_pool.is_started:
+            logger.info("Kafka: Consumers are already running, reusing the runner")
+            return self.runner
+
         topics_to_listen = only or self.handlers.get_topics()
         self.consumer_pool.init(*topics_to_listen, **params)
         batch_size = batch_size or self.cfg.batch_size
-        self.runner = (
+        runner = (
             BatchPoolRunner(
                 self.consumer_pool,
                 self.handlers,
@@ -267,7 +272,10 @@ class KafkaPlugin(BasePlugin):
         )
         should_monitor = self.cfg.monitor if monitor is None else monitor
         monitor_interval = self.cfg.monitor_interval if should_monitor else None
-        await self.runner.start(monitor_interval, context=context)
+        await runner.start(monitor_interval, context=context)
+
+        self.runner = runner
+        return runner
 
     async def send(self, topic: str, value: Any, key=None, **params):
         """Encode and publish a message, returning aiokafka's delivery future.
