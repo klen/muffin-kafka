@@ -24,7 +24,7 @@ class ConsumerPool:
     params: dict = dc.field(default_factory=dict)
     is_started: bool = False
 
-    def setup(self, group_id: str, **params):
+    def setup(self, group_id: str | None, **params):
         """Store the default consumer options and the fallback ``group_id``."""
         self.params = params
         self.group_id = group_id

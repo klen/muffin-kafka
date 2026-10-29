@@ -125,9 +125,9 @@ class KafkaPlugin(BasePlugin):
     def setup_commands(self, app: Application):
         """Register ``kafka-healthcheck`` and ``kafka-listen`` unless ``setup_commands`` is off.
 
-        ``kafka-healthcheck`` does not use the app lifespan, ``kafka-listen`` does,
-        so the plugin (and its automatic ``listen``) starts before the command
-        body runs.
+        ``kafka-healthcheck`` starts the pool itself (or reuses a running one),
+        ``kafka-listen`` runs inside the app lifespan so the plugin (and its
+        automatic ``listen``) starts before the command body runs.
         """
         if not self.cfg.setup_commands:
             return
@@ -138,12 +138,30 @@ class KafkaPlugin(BasePlugin):
 
             param only: Optional list of topics to check (defaults to registered handlers).
             param max_lag: Maximum allowed lag for healthcheck.
+
+            Starts the consumers when the pool is not running yet (a separate pool,
+            so the plugin's own consumers are untouched) and stops them afterwards
+            with ``commit=False``; a running pool is reused. Exits with status 1
+            when the check cannot be performed (no assigned partitions) or when any
+            partition lag exceeds ``max_lag``.
             """
             topics_to_listen = only or self.handlers.get_topics()
-            self.consumer_pool.init(*topics_to_listen)
-            healthcheck = ConsumerPoolHealthcheck(self.consumer_pool, max_lag=max_lag)
-            await healthcheck.process()
-            if not healthcheck:
+            pool = self.consumer_pool
+            started_here = not pool.is_started
+            if started_here:
+                pool = ConsumerPool()
+                pool.setup(self.consumer_pool.group_id, **self.consumer_pool.params)
+                pool.init(*topics_to_listen)
+                await pool.start()
+
+            try:
+                checker = ConsumerPoolHealthcheck(pool, max_lag=max_lag)
+                performed = await checker.process()
+            finally:
+                if started_here:
+                    await pool.stop(commit=False)
+
+            if not performed or not checker:
                 app.logger.error("Kafka healthcheck failed")
                 raise SystemExit(1)
 
