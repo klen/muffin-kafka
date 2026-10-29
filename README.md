@@ -270,7 +270,7 @@ The monitor interval comes from the `monitor_interval` config option; there is n
 The command runs inside the application lifespan, so `plugin.startup()` executes first.
 With the default `listen=True` that already starts the consumers, and the command then
 starts the same consumers a second time. aiokafka rejects a second `start()` with
-`AssertionError("Did you call `start` twice?")`. When you run consumers with this command,
+``AssertionError("Did you call `start` twice?")``. When you run consumers with this command,
 set `listen=False` (for example `KAFKA_LISTEN=false`) in the process that runs it; leave
 `listen=True` only when the application itself should consume in-process.
 
@@ -459,7 +459,7 @@ for a per-consumer DB session).
 
 - The consumer pool can be started once. A second `listen()` for the same topics, calling
   `plugin.listen()` twice, or `plugin.restart()` all end in aiokafka's
-  `AssertionError("Did you call `start` twice?")`. Restart the process instead.
+  ``AssertionError("Did you call `start` twice?")``. Restart the process instead.
 - `enable_auto_commit=False` without `group_id` crashes the consumer task on the first
   successful commit (`IllegalOperation`). Set a `group_id`, or switch auto-commit on.
 - A failed record does not stop the consumer, but it is not retried per message: the next
