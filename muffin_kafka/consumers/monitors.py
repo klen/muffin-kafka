@@ -7,6 +7,7 @@ from time import time
 from typing import Any
 
 from aiokafka.consumer.consumer import AIOKafkaConsumer
+from aiokafka.errors import KafkaError
 from aiokafka.structs import TopicPartition
 
 from muffin_kafka import logger
@@ -59,7 +60,12 @@ class ConsumerPoolMonitor(abc.ABC):
         if not assigned:
             return False
 
-        end_offsets = await consumer.end_offsets(assigned)
+        try:
+            end_offsets = await consumer.end_offsets(assigned)
+        except KafkaError as exc:
+            logger.warning("[Kafka Monitor] Failed to fetch end offsets: %s", exc)
+            return False
+
         for tp in assigned:
             await self.process_tp(consumer, tp, end_offsets.get(tp, 0))
         return True
@@ -95,7 +101,10 @@ class ConsumerPoolLogger(ConsumerPoolMonitor):
         interval = self.interval if interval is None else interval
 
         while interval:
-            await self.process()
+            try:
+                await self.process()
+            except Exception:  # noqa: BLE001
+                logger.exception("[Kafka Monitor] Monitoring pass failed")
             await sleep(interval)
 
     async def process_tp(self, consumer: AIOKafkaConsumer, tp: TopicPartition, end_offset: int):
@@ -142,8 +151,17 @@ class ConsumerPoolHealthcheck(ConsumerPoolMonitor):
     is_healthy: bool = True
 
     async def process_tp(self, consumer: AIOKafkaConsumer, tp: TopicPartition, end_offset: int):
-        """Update ``is_healthy`` for one partition and log its lag."""
-        committed = await consumer.committed(tp) or 0
+        """Update ``is_healthy`` for one partition and log its lag.
+
+        A partition that cannot be read is logged and marks the pool unhealthy.
+        """
+        try:
+            committed = await consumer.committed(tp) or 0
+        except KafkaError as exc:
+            logger.warning("[Healthcheck] Failed to fetch committed offset for %s: %s", tp, exc)
+            self.is_healthy = False
+            return
+
         lag = end_offset - committed
         logger.info(
             f"[Healthcheck] {tp.topic}-{tp.partition} | committed: {committed} | end: {end_offset} | lag: {lag}",  # noqa: E501

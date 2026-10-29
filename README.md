@@ -107,8 +107,8 @@ The parts, in order:
 | `kafka-listen` | Runs inside the application lifespan, then calls `KafkaPlugin.listen()`. |
 | `listen()` | Picks the runner and calls `consumer_pool.init(*topics)`. |
 | `ConsumerPool` | Holds one `AIOKafkaConsumer` per topic; `init()` creates only consumers for topics that are not covered yet. |
-| `PoolRunner` | Starts the pool, creates one asyncio task per consumer, optionally one monitor task. |
-| `SinglePoolRunner` / `BatchPoolRunner` | Fetch one record (`getone()`) or a batch (`getmany()`), pass each record to the handlers, commit offsets. |
+| `PoolRunner` | Starts the pool, creates one asyncio task per consumer, optionally one monitor task, runs the consume loop (`getone()` or `getmany()`). |
+| Consume loop | Fetches one record or one batch, passes each record to the handlers and commits offsets. |
 | `ConsumerHandlers` | Looks up the handlers registered for `message.topic` and calls them in registration order. |
 | Commit | With `enable_auto_commit=False` the runner commits after a successfully handled message or batch. |
 | Monitor | `ConsumerPoolLogger` logs every partition every `monitor_interval` seconds. |
@@ -133,10 +133,12 @@ retried only if the process stops before any later commit on the same partition.
 
 ### What `stop()` does
 
-`runner.stop()` sets a stop flag, commits the consumer positions, stops the consumers and
-only then cancels the consumer tasks. Because the commit happens before the cancel, a
-message that is still being handled at shutdown can be committed before its handler
-finishes. `plugin.shutdown()` always commits, even with `enable_auto_commit=True`.
+`runner.stop()` sets the stop flag, cancels the consumer tasks and waits for them, then
+closes the consumers. It does not commit: with `enable_auto_commit=False` the loop already
+committed after every successful record or batch, and a commit at shutdown would only store
+the position of a message whose handler is still running. A handler interrupted this way
+leaves its record uncommitted, so the record is delivered again on restart (at-least-once).
+Pass `stop(commit=True)` if you really want a final commit of the current positions.
 
 ## Offsets and errors
 
@@ -177,7 +179,9 @@ last fetched position every `auto_commit_interval_ms` (default 5000, not a plugi
 pass it with `plugin.listen(auto_commit_interval_ms=1000)` if needed), regardless of what
 your handlers did. A failing handler is therefore invisible to the commit logic: the
 record is marked consumed anyway and is not retried. Use this mode only when losing a
-failed message is acceptable or the handler has its own retry/outbox logic.
+failed message is acceptable or the handler has its own retry/outbox logic. `stop()` does
+not commit in this mode either: positions committed by aiokafka up to 5 s before the stop
+are replayed on restart.
 
 ### Error handler
 
@@ -402,7 +406,7 @@ kafka = Kafka(app, bootstrap_servers="localhost:9092", produce=True)
 | `enable_auto_commit` | `bool` | `False` | Let aiokafka commit positions every 5 s instead of committing after successful handling. |
 | `auto_offset_reset` | `str` | `"earliest"` | Start position when the group has no committed offset. |
 | `max_poll_records` | `int` or `None` | `None` | Passed to `AIOKafkaConsumer`; the runners pass their own limit, so it has no effect here. |
-| `batch_size` | `int` or `None` | `None` | Enables `BatchPoolRunner` with this `getmany()` limit. |
+| `batch_size` | `int` or `None` | `None` | Enables batch reading with this `getmany()` limit; a numeric string is accepted. |
 | `monitor` | `bool` | `False` | Start the `ConsumerPoolLogger` task with the consumers. |
 | `monitor_interval` | `int` | `60` | Seconds between monitor passes. |
 | `setup_commands` | `bool` | `True` | Register `kafka-listen` and `kafka-healthcheck`. |
@@ -448,20 +452,22 @@ Import from `muffin_kafka.consumers`:
 
 | Class | Description |
 | ----- | ----------- |
-| `ConsumerPool` | One consumer per topic. Lifecycle: `setup(group_id, **params)` → `init(*topics, **params)` / `init_consumer(*topics, **params)` → `start()` → `stop(commit=True)`. `init()` skips topics that an existing consumer already subscribes to; `start()` is idempotent. |
-| `SinglePoolRunner` | `getone()` loop, commit after each successful record. |
-| `BatchPoolRunner` | `getmany()` loop, commit once per successful batch; handlers still get single records. |
+| `ConsumerPool` | One consumer per topic. Lifecycle: `setup(group_id, **params)` → `init(*topics, **params)` / `init_consumer(*topics, **params)` → `start()` → `stop(commit=True)`. `init()` skips topics the pool already covers and `stop()` logs commit failures instead of raising; `start()` is idempotent. |
+| `PoolRunner` | The consume loop: `getone()` when `batch_size` is `None`, `getmany(max_records=batch_size)` otherwise. Commits after each successful record or batch with `enable_auto_commit=False`. |
+| `SinglePoolRunner`, `BatchPoolRunner` | Aliases of `PoolRunner`, kept so existing imports work. |
 | `ConsumerHandlers` | Topic → handlers mapping used by the runners. |
 | `ConsumerPoolMonitor` | Base monitor: `process()` returns whether any assigned partition was inspected, via `process_consumer()` and `process_tp()`. |
 | `ConsumerPoolLogger` | Monitor that logs offsets, lag and poll delay; `__call__(interval)` is the loop task. |
 | `ConsumerPoolHealthcheck` | Monitor that sets `is_healthy = False` when `lag > max_lag`; `process()` returns `False` when nothing could be checked, so test both. |
 | `safe_commit(consumer)` | `consumer.commit()` that ignores `CommitFailedError` after a rebalance. |
 
-`PoolRunner` itself is the extension point for a different fetching strategy: subclass it
-and implement `_run_consumer(consumer)`, then instantiate it with the pool and handlers
-instead of calling `plugin.listen()`. `start(monitor, context)` accepts a monitor interval
-and a callable returning an async context manager, which wraps each consumer loop (useful
-for a per-consumer DB session).
+`PoolRunner` is also the extension point for a different fetching strategy: subclass it,
+override `_run_consumer(consumer)` and instantiate it with the pool and handlers instead of
+calling `plugin.listen()`. `start(monitor, context)` accepts a monitor interval and a
+callable returning an async context manager, which wraps each consumer loop (useful for a
+per-consumer DB session). The loop itself survives connection and group errors (it logs,
+waits one second and polls again); a configuration error such as a missing `group_id` still
+stops the task.
 
 ## Limitations and troubleshooting
 
@@ -475,10 +481,13 @@ for a per-consumer DB session).
 - A failed record does not stop the consumer, but it is not retried per message: the next
   successful commit on that partition moves past it. Treat handler failures as dropped
   unless the process stops first.
-- A crashing consumer task is logged by `PoolRunner` and never restarted. Other topics
-  keep consuming; `kafka-listen` exits when the runner's tasks finish or raise.
-- `stop()` commits before cancelling the tasks. A handler still running at shutdown may
-  have its offset committed, so in-flight work can be lost on a graceful stop.
+- Connection and group errors (`RebalanceInProgressError`, `KafkaConnectionError`, ...) in
+  the consume loop are logged and retried after one second. Any other crash is logged by
+  `PoolRunner` and never restarted: other topics keep consuming and `kafka-listen` exits
+  when the runner's tasks finish or raise.
+- `stop()` cancels the loops before doing anything else: a handler still running at
+  shutdown is interrupted and its record is delivered again on restart, so shutdown can
+  duplicate work but never skips it. Do not count on `stop()` to commit.
 - `kafka-healthcheck` joins the configured consumer group, so it triggers a rebalance and
   only inspects the partitions assigned to that temporary consumer. A pool without any
   assigned partition is reported as a failed check (exit code 1).

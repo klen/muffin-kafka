@@ -1,6 +1,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from aiokafka.errors import KafkaConnectionError
 
 from muffin_kafka.consumers import ConsumerPool, ConsumerPoolHealthcheck
 
@@ -83,12 +84,33 @@ class TestConsumerPoolHealthcheck:
         assert performed is False
         assert healthcheck.is_healthy is True
 
+    async def test_read_error_marks_unhealthy(self, started_pool, mock_consumer):
+        tp = create_topic_partition()
+        mock_consumer.assignment.return_value = [tp]
+        mock_consumer.end_offsets = AsyncMock(return_value={tp: 100})
+        mock_consumer.committed = AsyncMock(side_effect=KafkaConnectionError())
+
+        healthcheck = ConsumerPoolHealthcheck(max_lag=20, pool=started_pool)
+        performed = await healthcheck.process()
+
+        assert performed is True
+        assert healthcheck.is_healthy is False
+
+    async def test_end_offsets_error_counts_as_not_checked(self, started_pool, mock_consumer):
+        mock_consumer.assignment.return_value = [create_topic_partition()]
+        mock_consumer.end_offsets = AsyncMock(side_effect=KafkaConnectionError())
+
+        healthcheck = ConsumerPoolHealthcheck(max_lag=20, pool=started_pool)
+        performed = await healthcheck.process()
+
+        assert performed is False
+        assert healthcheck.is_healthy is True
+
 
 class TestHealthcheckCommand:
     """Tests for the kafka-healthcheck management command."""
 
     async def test_command_fails_when_nothing_can_be_checked(self, kafka, mock_consumer):
-        mock_consumer._client._topics = {"events"}
         mock_consumer.assignment.return_value = []
         command = kafka.app.manage.commands["kafka-healthcheck"]
 
@@ -108,7 +130,6 @@ class TestHealthcheckCommand:
 
     async def test_command_passes_when_lag_is_within_limit(self, kafka, mock_consumer):
         tp = create_topic_partition()
-        mock_consumer._client._topics = {"events"}
         mock_consumer.assignment.return_value = [tp]
         mock_consumer.end_offsets = AsyncMock(return_value={tp: 100})
         mock_consumer.committed = AsyncMock(return_value=90)
@@ -122,7 +143,6 @@ class TestHealthcheckCommand:
 
     async def test_command_fails_when_lag_exceeds_limit(self, kafka, mock_consumer):
         tp = create_topic_partition()
-        mock_consumer._client._topics = {"events"}
         mock_consumer.assignment.return_value = [tp]
         mock_consumer.end_offsets = AsyncMock(return_value={tp: 100})
         mock_consumer.committed = AsyncMock(return_value=50)
@@ -139,7 +159,6 @@ class TestHealthcheckCommand:
 
     async def test_command_reuses_started_pool(self, kafka, mock_consumer):
         tp = create_topic_partition()
-        mock_consumer._client._topics = {"events"}
         mock_consumer.assignment.return_value = [tp]
         mock_consumer.end_offsets = AsyncMock(return_value={tp: 100})
         mock_consumer.committed = AsyncMock(return_value=90)

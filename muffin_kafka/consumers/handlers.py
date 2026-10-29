@@ -56,7 +56,7 @@ class ConsumerHandlers:
         logger.debug("Kafka msg: %s-%s-%s", msg.topic, msg.partition, msg.offset)
         success = True
 
-        for fn in self.handlers[msg.topic]:
+        for fn in self.handlers.get(msg.topic, ()):
             try:
                 await fn(msg)
 

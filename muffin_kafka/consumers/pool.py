@@ -5,7 +5,17 @@ import dataclasses as dc
 
 from aiokafka.consumer.consumer import AIOKafkaConsumer
 
+from muffin_kafka import logger
+
 from .utils import safe_commit
+
+
+async def _commit(consumer: AIOKafkaConsumer) -> None:
+    """Commit best-effort: a failing commit must not abort ``stop()``."""
+    try:
+        await safe_commit(consumer)
+    except Exception:  # noqa: BLE001
+        logger.exception("Kafka: Offset commit failed on stop")
 
 
 @dc.dataclass
@@ -20,6 +30,7 @@ class ConsumerPool:
     """
 
     consumers: list[AIOKafkaConsumer] = dc.field(default_factory=list)
+    topics: set[str] = dc.field(default_factory=set)
     group_id: str | None = None
     params: dict = dc.field(default_factory=dict)
     is_started: bool = False
@@ -30,19 +41,13 @@ class ConsumerPool:
         self.group_id = group_id
 
     def init(self, *topics: str, **params):
-        """Create a consumer for every topic that no existing consumer subscribes to.
+        """Create a consumer for every topic in ``topics`` that the pool does not cover.
 
         The consumers are created but not started. ``params`` are merged over the
         options from ``setup()`` for the new consumers only.
         """
-        topics_to_listen = set(topics)
-        missing = topics_to_listen.copy()
-        for consumer in self.consumers:
-            missing -= set(consumer._client._topics)
-
-        for topic in missing:
-            consumer = self.init_consumer(topic, **params)
-            self.consumers.append(consumer)
+        for topic in set(topics) - self.topics:
+            self.consumers.append(self.init_consumer(topic, **params))
 
     def init_consumer(self, *topics: str, **params) -> AIOKafkaConsumer:
         """Create an ``AIOKafkaConsumer`` for ``topics`` from the stored options.
@@ -52,7 +57,9 @@ class ConsumerPool:
         """
         merged = dict(self.params, **params)
         merged["group_id"] = merged.get("group_id") or self.group_id
-        return AIOKafkaConsumer(*topics, **merged)
+        consumer = AIOKafkaConsumer(*topics, **merged)
+        self.topics.update(topics)
+        return consumer
 
     async def start(self):
         """Connect every consumer to the cluster and mark the pool as started.
@@ -71,13 +78,13 @@ class ConsumerPool:
     async def stop(self, *, commit: bool = True):
         """Commit offsets (unless ``commit=False``) and close every consumer.
 
-        ``safe_commit`` swallows rebalance-related commit failures; other errors
-        propagate and may prevent the consumers from being stopped.
+        Commit failures are logged and never abort the shutdown; the consumers are
+        always closed. Uncommitted records are delivered again by the broker.
         """
         if commit:
             async with asyncio.TaskGroup() as tg:
                 for consumer in self.consumers:
-                    tg.create_task(safe_commit(consumer))
+                    tg.create_task(_commit(consumer))
 
         async with asyncio.TaskGroup() as tg:
             for consumer in self.consumers:

@@ -1,6 +1,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from aiokafka.errors import KafkaConnectionError
 
 from muffin_kafka.consumers import ConsumerPool, ConsumerPoolLogger
 
@@ -68,6 +69,13 @@ class TestConsumerPoolLogger:
         mock_consumer.position = AsyncMock(side_effect=RuntimeError("kafka error"))
 
         await monitor.process_tp(mock_consumer, tp, 100)
+
+    async def test_skips_consumer_when_end_offsets_fail(self, monitor, mock_consumer):
+        tp = MagicMock()
+        mock_consumer.assignment.return_value = [tp]
+        mock_consumer.end_offsets = AsyncMock(side_effect=KafkaConnectionError())
+
+        assert await monitor.process_consumer(mock_consumer) is False
 
     async def test_skips_consumer_with_no_assignments(self, monitor, mock_consumer):
         mock_consumer.assignment.return_value = []

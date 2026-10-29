@@ -30,7 +30,6 @@ def kafka(app, options):
 def mock_consumer():
     """Create a mock Kafka consumer with common attributes pre-configured."""
     consumer = MagicMock()
-    consumer._client._topics = set()
     consumer.start = AsyncMock()
     consumer.stop = AsyncMock()
     consumer.commit = AsyncMock()

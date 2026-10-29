@@ -1,5 +1,6 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
+from muffin_kafka.consumers import ConsumerHandlers
 from muffin_kafka.plugin import KafkaPlugin
 
 
@@ -40,6 +41,16 @@ class TestTopicsHandlerBinding:
 
         assert kafka.handlers.handlers["test"] == [handle]
         assert kafka.handlers.handlers["test2"] == [handle]
+
+
+class TestHandlerDispatch:
+    """Tests for ConsumerHandlers.__call__."""
+
+    async def test_unknown_topic_counts_as_handled(self):
+        handlers = ConsumerHandlers()
+
+        assert await handlers(MagicMock(topic="stranger")) is True
+        assert handlers.get_topics() == set()
 
 
 class TestCommonParams:

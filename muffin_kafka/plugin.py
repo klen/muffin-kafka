@@ -18,7 +18,7 @@ from muffin_kafka.consumers import (
     TCallable,
     TErrCallable,
 )
-from muffin_kafka.consumers.runner import BatchPoolRunner, PoolRunner, SinglePoolRunner
+from muffin_kafka.consumers.runner import PoolRunner
 
 if TYPE_CHECKING:
     from muffin.app import Application
@@ -30,8 +30,8 @@ class KafkaPlugin(BasePlugin):
     Options live in ``cfg`` (see ``defaults``). ``setup()`` registers the
     management commands and copies the Kafka options into ``consumer_pool``.
     ``startup()`` creates the producer when ``produce`` is enabled and starts the
-    consumers when ``listen`` is enabled; ``shutdown()`` stops the runner
-    (committing offsets) and the producer.
+    consumers when ``listen`` is enabled; ``shutdown()`` stops the runner and the
+    producer.
 
     Runtime state: ``producer`` (only with ``produce``), ``handlers`` filled by
     the decorators below, ``consumer_pool`` (one consumer per listened topic) and
@@ -110,15 +110,17 @@ class KafkaPlugin(BasePlugin):
             await self.listen()
 
     async def shutdown(self):
-        """Stop the runner with a final offset commit, then stop the producer.
+        """Cancel the consumer tasks, then stop the producer.
 
-        The consumer tasks are cancelled after the commit, so a message that is
-        still being processed may be committed before its handler finishes.
+        Offsets are not committed here: with ``enable_auto_commit=False`` the
+        loops already committed after every successful record, so committing at
+        shutdown would only store the position of a message whose handler is
+        still running. Uncommitted records are delivered again on restart.
         """
         self.app.logger.info("Stopping Kafka plugin: %s", self.name)
 
         if self.runner:
-            await self.runner.stop(commit=True)
+            await self.runner.stop()
 
         if self.producer:
             await self.producer.stop()
@@ -239,11 +241,13 @@ class KafkaPlugin(BasePlugin):
         """Start consuming messages from ``only`` topics (all registered topics if empty).
 
         Creates one consumer per topic (``consumer_pool.init``) and starts a
-        ``BatchPoolRunner`` when ``batch_size`` (argument or ``cfg.batch_size``)
-        is set, a ``SinglePoolRunner`` otherwise. ``monitor=None`` falls back to
-        ``cfg.monitor``; the interval is always ``cfg.monitor_interval``.
-        ``context`` is a callable returning an async context manager wrapped
-        around each per-consumer loop; ``**params`` go to ``AIOKafkaConsumer``.
+        ``PoolRunner`` reading batches when ``batch_size`` (argument or
+        ``cfg.batch_size``) is set, single records otherwise. ``monitor=None``
+        falls back to ``cfg.monitor``; the interval is always
+        ``cfg.monitor_interval``. ``context`` is a callable returning an async
+        context manager wrapped around each per-consumer loop; ``**params`` go to
+        ``AIOKafkaConsumer`` (``enable_auto_commit`` also switches the runner's
+        commit mode).
 
         Idempotent: when the consumers are already running, the existing runner
         is returned and the arguments are ignored. Call ``stop()`` first to
@@ -255,20 +259,12 @@ class KafkaPlugin(BasePlugin):
 
         topics_to_listen = only or self.handlers.get_topics()
         self.consumer_pool.init(*topics_to_listen, **params)
-        batch_size = batch_size or self.cfg.batch_size
-        runner = (
-            BatchPoolRunner(
-                self.consumer_pool,
-                self.handlers,
-                batch_size=batch_size,
-                enable_auto_commit=self.cfg.enable_auto_commit,
-            )
-            if batch_size
-            else SinglePoolRunner(
-                self.consumer_pool,
-                self.handlers,
-                enable_auto_commit=self.cfg.enable_auto_commit,
-            )
+        batch_size = int(batch_size or self.cfg.batch_size or 0) or None
+        runner = PoolRunner(
+            self.consumer_pool,
+            self.handlers,
+            batch_size=batch_size,
+            enable_auto_commit=bool(params.get("enable_auto_commit", self.cfg.enable_auto_commit)),
         )
         should_monitor = self.cfg.monitor if monitor is None else monitor
         monitor_interval = self.cfg.monitor_interval if should_monitor else None
@@ -281,8 +277,9 @@ class KafkaPlugin(BasePlugin):
         """Encode and publish a message, returning aiokafka's delivery future.
 
         ``str`` values are UTF-8 encoded, ``bytes`` are sent as is, anything else
-        is JSON-encoded; a truthy ``str`` key is UTF-8 encoded. Extra ``params``
-        go to ``AIOKafkaProducer.send()`` (``partition``, ``headers``, ...).
+        is JSON-encoded; a ``str`` key (even an empty one) is UTF-8 encoded. Extra
+        ``params`` go to ``AIOKafkaProducer.send()`` (``partition``, ``headers``,
+        ...).
         Awaiting this method only queues the message, await the returned future
         to wait for delivery. Raises ``PluginError`` when ``produce`` is disabled
         or the producer was not started.
@@ -293,7 +290,7 @@ class KafkaPlugin(BasePlugin):
         if self.producer is None:
             raise PluginError("Kafka: Producer is not initialized")
 
-        if key and isinstance(key, str):
+        if isinstance(key, str):
             key = key.encode("utf-8")
 
         if not isinstance(value, bytes):

@@ -60,6 +60,15 @@ class TestSend:
         key = kafka.producer.send.await_args.kwargs["key"]
         assert key == b"user-1"
 
+    async def test_encodes_empty_string_key(self, app):
+        """An empty key is still a key and must be bytes."""
+        kafka = KafkaPlugin(app, produce=True)
+        kafka.producer = AsyncMock()
+
+        await kafka.send("events", {"data": "test"}, key="")
+
+        assert kafka.producer.send.await_args.kwargs["key"] == b""
+
     async def test_passes_through_additional_params(self, app):
         """Should pass additional parameters (partition, headers, etc.) to the producer."""
         kafka = KafkaPlugin(app, produce=True)

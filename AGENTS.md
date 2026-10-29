@@ -35,11 +35,14 @@ uv run pytest    # run all tests
 - Encode keys/values before `send`.
     Keep handler registration explicit.
 - Consumer pool: one `AIOKafkaConsumer` per topic, one asyncio task per consumer.
-    `SinglePoolRunner` uses `getone()`, `BatchPoolRunner` uses `getmany()` and is selected by a
-    truthy `batch_size`.
+    `PoolRunner` uses `getone()` when `batch_size` is falsy and `getmany()` otherwise;
+    `SinglePoolRunner`/`BatchPoolRunner` are aliases kept for compatibility.
+    `ConsumerPool` remembers its topics in `pool.topics`, so `init()` never subscribes twice.
 - Offsets: with `enable_auto_commit=False` the runner commits only after successful handling,
     and `commit()` stores the current position. A later success therefore commits past a failed
     record; see the README for the exact semantics.
+- `stop()` cancels the loops before closing the consumers and does not commit by default
+    (`stop(commit=True)` does). Shutdown can duplicate work, never skip it.
 - A pool/runner start is idempotent: `ConsumerPool.start()` does nothing when already started and
     `KafkaPlugin.listen()` returns the running runner. `stop()` then `start()` again still needs fresh
     aiokafka consumers (restart the process or build a new pool).

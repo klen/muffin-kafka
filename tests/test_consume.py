@@ -3,10 +3,10 @@ from asyncio import Future
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from aiokafka.errors import CommitFailedError, ConsumerStoppedError
+from aiokafka.errors import CommitFailedError, ConsumerStoppedError, IllegalOperation
 
 from muffin_kafka.consumers import ConsumerHandlers, ConsumerPool
-from muffin_kafka.consumers.runner import BatchPoolRunner, SinglePoolRunner
+from muffin_kafka.consumers.runner import BatchPoolRunner, PoolRunner, SinglePoolRunner
 from muffin_kafka.plugin import KafkaPlugin
 
 
@@ -18,39 +18,49 @@ class TestListen:
         kafka: KafkaPlugin,
         mock_consumer,
     ):
-        mock_consumer._client._topics = {"events"}
         mock_consumer.getone = AsyncMock(side_effect=RuntimeError("stop"))
         kafka.consumer_pool.consumers = [mock_consumer]
+        kafka.consumer_pool.topics = {"events"}
 
         with patch.object(kafka.consumer_pool, "start", new_callable=AsyncMock):
             await kafka.listen("events", monitor=False)
             await kafka.shutdown()
 
-        assert isinstance(kafka.runner, SinglePoolRunner)
+        assert isinstance(kafka.runner, PoolRunner)
+        assert kafka.runner.batch_size is None
         assert kafka.runner.pool == kafka.consumer_pool
         assert kafka.runner.handlers == kafka.handlers
 
-    @pytest.mark.parametrize("options", [{"batch_size": 10}])
+    @pytest.mark.parametrize("options", [{"batch_size": 10}, {"batch_size": "10"}])
     async def test_creates_batch_runner_when_batch_size_set(
         self,
         kafka: KafkaPlugin,
         mock_consumer,
     ):
-        mock_consumer._client._topics = {"events"}
-
         async def getmany(**kwargs):
             del kwargs
             raise RuntimeError("stop")
 
         mock_consumer.getmany = getmany
         kafka.consumer_pool.consumers = [mock_consumer]
+        kafka.consumer_pool.topics = {"events"}
 
         with patch.object(kafka.consumer_pool, "start", new_callable=AsyncMock):
             await kafka.listen("events", monitor=False)
             await kafka.shutdown()
 
-        assert isinstance(kafka.runner, BatchPoolRunner)
         assert kafka.runner.batch_size == 10
+
+    async def test_runner_follows_enable_auto_commit_param(self, kafka: KafkaPlugin, mock_consumer):
+        mock_consumer.getone = AsyncMock(side_effect=RuntimeError("stop"))
+        kafka.consumer_pool.consumers = [mock_consumer]
+        kafka.consumer_pool.topics = {"events"}
+
+        with patch.object(kafka.consumer_pool, "start", new_callable=AsyncMock):
+            runner = await kafka.listen("events", monitor=False, enable_auto_commit=True)
+            await kafka.shutdown()
+
+        assert runner.enable_auto_commit is True
 
     async def test_passes_setup_params_to_consumer(self, kafka: KafkaPlugin):
         kafka.consumer_pool.setup(
@@ -97,13 +107,12 @@ class TestListen:
         assert call_order == ["pool.start", "register_task"]
 
     async def test_starts_pool(self, kafka: KafkaPlugin, mock_consumer):
-        mock_consumer._client._topics = {"events"}
-
         async def getone():
             raise RuntimeError("stop")
 
         mock_consumer.getone = getone
         kafka.consumer_pool.consumers = [mock_consumer]
+        kafka.consumer_pool.topics = {"events"}
 
         with patch.object(kafka.consumer_pool, "start", new_callable=AsyncMock) as mock_start:
             await kafka.listen("events", monitor=False)
@@ -113,7 +122,6 @@ class TestListen:
 
     async def test_passes_batch_size_from_manage_command(self, kafka: KafkaPlugin):
         consumer = MagicMock()
-        consumer._client._topics = {"events"}
         consumer.start = AsyncMock()
 
         done_future = Future()
@@ -133,12 +141,10 @@ class TestListen:
             await kafka.app.manage.commands["kafka-listen"]("events", monitor=False, batch_size=5)
 
         mock_consumer_class.assert_called_once()
-        assert isinstance(kafka.runner, BatchPoolRunner)
         assert kafka.runner.batch_size == 5
 
     async def test_coerces_batch_size_from_string(self, kafka: KafkaPlugin):
         consumer = MagicMock()
-        consumer._client._topics = {"events"}
         consumer.start = AsyncMock()
 
         done_future = Future()
@@ -158,7 +164,6 @@ class TestListen:
             await kafka.app.manage.commands["kafka-listen"]("events", monitor=False, batch_size="5")
 
         mock_consumer_class.assert_called_once()
-        assert isinstance(kafka.runner, BatchPoolRunner)
         assert kafka.runner.batch_size == 5
 
     async def test_uses_monitor_interval_from_config(self, app, options):
@@ -167,7 +172,6 @@ class TestListen:
         kafka = KafkaPlugin(app, **options)
 
         consumer = MagicMock()
-        consumer._client._topics = {"events"}
         consumer.start = AsyncMock()
 
         done_future = Future()
@@ -191,8 +195,8 @@ class TestListen:
         assert mock_logger_class.call_args.kwargs["interval"] == 30
 
     async def test_listen_is_idempotent(self, kafka: KafkaPlugin, mock_consumer):
-        mock_consumer._client._topics = {"events"}
         kafka.consumer_pool.consumers = [mock_consumer]
+        kafka.consumer_pool.topics = {"events"}
 
         with patch(
             "muffin_kafka.consumers.runner.create_task",
@@ -214,7 +218,6 @@ class TestListen:
         async def handler(message):
             del message
 
-        mock_consumer._client._topics = {"events"}
         done_future = Future()
         done_future.set_result(None)
 
@@ -250,9 +253,8 @@ class TestConsumerPoolInit:
         assert calls == {"events", "alerts"}
 
     async def test_skips_topics_already_consumed(self, kafka: KafkaPlugin):
-        existing = MagicMock()
-        existing._client._topics = {"events"}
-        kafka.consumer_pool.consumers.append(existing)
+        kafka.consumer_pool.consumers.append(MagicMock())
+        kafka.consumer_pool.topics = {"events"}
         kafka.consumer_pool.setup(group_id="g", bootstrap_servers="kafka:9092")
 
         with patch(
@@ -677,6 +679,66 @@ class TestConsumerPoolStart:
         mock_consumer.start.assert_awaited_once()
 
 
+class TestPoolRunnerStop:
+    """Tests for PoolRunner.stop — cancel the loops first, commit only on request."""
+
+    async def test_stop_cancels_tasks_without_commit(self, mock_consumer):
+        pool = ConsumerPool()
+        pool.consumers = [mock_consumer]
+        pool.is_started = True
+        runner = PoolRunner(pool=pool, handlers=ConsumerHandlers())
+
+        async def slow():
+            await asyncio.sleep(100)
+
+        runner.register_task(slow())
+        await asyncio.sleep(0)
+        await runner.stop()
+
+        assert runner.tasks == []
+        assert mock_consumer.commit.await_count == 0
+        assert mock_consumer.stop.await_count == 1
+        assert pool.is_started is False
+
+    async def test_stop_commits_when_requested(self, mock_consumer):
+        pool = ConsumerPool()
+        pool.consumers = [mock_consumer]
+        pool.is_started = True
+        runner = PoolRunner(pool=pool, handlers=ConsumerHandlers())
+
+        await runner.stop(commit=True)
+
+        mock_consumer.commit.assert_awaited_once()
+        mock_consumer.stop.assert_awaited_once()
+
+    async def test_stop_tolerates_commit_errors(self, mock_consumer):
+        mock_consumer.commit = AsyncMock(side_effect=IllegalOperation("Requires group_id"))
+        pool = ConsumerPool()
+        pool.consumers = [mock_consumer]
+        pool.is_started = True
+        runner = PoolRunner(pool=pool, handlers=ConsumerHandlers())
+
+        async def slow():
+            await asyncio.sleep(100)
+
+        runner.register_task(slow())
+        await asyncio.sleep(0)
+        await runner.stop(commit=True)
+
+        mock_consumer.stop.assert_awaited_once()
+        assert runner.tasks == []
+
+    async def test_cancelled_task_is_not_reported_as_crash(self, mock_consumer):
+        pool = ConsumerPool()
+        runner = PoolRunner(pool=pool, handlers=ConsumerHandlers())
+
+        task = asyncio.ensure_future(asyncio.sleep(100))
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+        runner._handle_task_exception(task)  # must not raise CancelledError
+
+
 class TestConsumerPoolStop:
     """Tests for ConsumerPool.stop — commit failures must not abort shutdown."""
 
@@ -689,3 +751,13 @@ class TestConsumerPoolStop:
 
         mock_consumer.commit.assert_awaited_once()
         mock_consumer.stop.assert_awaited_once()
+
+    async def test_stop_tolerates_other_commit_errors(self, mock_consumer):
+        mock_consumer.commit = AsyncMock(side_effect=IllegalOperation("Requires group_id"))
+        pool = ConsumerPool()
+        pool.consumers = [mock_consumer]
+
+        await pool.stop()
+
+        mock_consumer.stop.assert_awaited_once()
+        assert pool.is_started is False
