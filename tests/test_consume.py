@@ -190,6 +190,47 @@ class TestListen:
         mock_logger_class.assert_called_once()
         assert mock_logger_class.call_args.kwargs["interval"] == 30
 
+    async def test_listen_is_idempotent(self, kafka: KafkaPlugin, mock_consumer):
+        mock_consumer._client._topics = {"events"}
+        kafka.consumer_pool.consumers = [mock_consumer]
+
+        with patch(
+            "muffin_kafka.consumers.runner.create_task",
+            side_effect=lambda c: (c.close(), MagicMock())[1],
+        ):
+            runner = await kafka.listen("events", monitor=False)
+            again = await kafka.listen("events", monitor=False)
+
+        assert runner is again
+        assert kafka.runner is runner
+        assert mock_consumer.start.await_count == 1
+
+    async def test_manage_command_reuses_runner_started_by_plugin(
+        self,
+        kafka: KafkaPlugin,
+        mock_consumer,
+    ):
+        @kafka.handle_topics("events")
+        async def handler(message):
+            del message
+
+        mock_consumer._client._topics = {"events"}
+        done_future = Future()
+        done_future.set_result(None)
+
+        with (
+            patch("muffin_kafka.consumers.pool.AIOKafkaConsumer", return_value=mock_consumer),
+            patch(
+                "muffin_kafka.consumers.runner.create_task",
+                side_effect=lambda c: (c.close(), MagicMock())[1],
+            ),
+            patch("asyncio.gather", return_value=done_future),
+        ):
+            await kafka.startup()
+            await kafka.app.manage.commands["kafka-listen"]("events")
+
+        assert mock_consumer.start.await_count == 1
+
 
 class TestConsumerPoolInit:
     """Tests for ConsumerPool.init — per-topic consumer creation."""
@@ -620,6 +661,20 @@ class TestRunner:
 
         assert len(handler_calls) == 2
         assert mock_consumer.commit.await_count == 2
+
+
+class TestConsumerPoolStart:
+    """Tests for ConsumerPool.start — repeated starts must be no-ops."""
+
+    async def test_start_is_idempotent(self, mock_consumer):
+        pool = ConsumerPool()
+        pool.consumers = [mock_consumer]
+
+        await pool.start()
+        await pool.start()
+
+        assert pool.is_started is True
+        mock_consumer.start.assert_awaited_once()
 
 
 class TestConsumerPoolStop:

@@ -1,3 +1,5 @@
+"""Helpers shared by the consumer subsystem."""
+
 from aiokafka.consumer.consumer import AIOKafkaConsumer
 from aiokafka.errors import CommitFailedError
 
