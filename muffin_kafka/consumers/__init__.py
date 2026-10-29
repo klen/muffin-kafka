@@ -1,3 +1,5 @@
+"""Consumer subsystem: per-topic consumer pool, runner loops, handlers and monitors."""
+
 from muffin_kafka.consumers.handlers import ConsumerHandlers, TCallable, TErrCallable
 from muffin_kafka.consumers.monitors import (
     ConsumerPoolHealthcheck,

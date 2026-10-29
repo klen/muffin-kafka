@@ -1,3 +1,5 @@
+"""Muffin plugin wiring an aiokafka producer and consumer pool into the app lifecycle."""
+
 from __future__ import annotations
 
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
@@ -22,6 +24,19 @@ if TYPE_CHECKING:
 
 
 class KafkaPlugin(BasePlugin):
+    """Kafka integration for Muffin.
+
+    Options live in ``cfg`` (see ``defaults``). ``setup()`` registers the
+    management commands and copies the Kafka options into ``consumer_pool``.
+    ``startup()`` creates the producer when ``produce`` is enabled and starts the
+    consumers when ``listen`` is enabled; ``shutdown()`` stops the runner
+    (committing offsets) and the producer.
+
+    Runtime state: ``producer`` (only with ``produce``), ``handlers`` filled by
+    the decorators below, ``consumer_pool`` (one consumer per listened topic) and
+    ``runner`` (``None`` until ``listen()`` is called).
+    """
+
     name = "kafka"
     defaults: ClassVar[Mapping[str, Any]] = {
         # Plugin options
@@ -66,7 +81,10 @@ class KafkaPlugin(BasePlugin):
         super().__init__(app, **kwargs)
 
     def setup(self, app: Application, **options) -> bool:
-        """Setup the plugin by registering management commands."""
+        """Bind the app, register management commands and configure the consumer pool.
+
+        Returns ``False`` without doing anything when the plugin is disabled.
+        """
         if not super().setup(app, **options):
             return False
 
@@ -76,7 +94,7 @@ class KafkaPlugin(BasePlugin):
         return True
 
     async def startup(self):
-        """Start the plugin by initializing producer and/or consumers based on configuration."""
+        """Start the producer (``produce``) and the consumers (``listen``) with the app."""
         logger = self.app.logger
         logger.info("Kafka: Starting plugin: %s", self.name)
         cfg = self.cfg
@@ -91,7 +109,11 @@ class KafkaPlugin(BasePlugin):
             await self.listen()
 
     async def shutdown(self):
-        """Stop the plugin by cancelling tasks and stopping producer and consumers."""
+        """Stop the runner with a final offset commit, then stop the producer.
+
+        The consumer tasks are cancelled after the commit, so a message that is
+        still being processed may be committed before its handler finishes.
+        """
         self.app.logger.info("Stopping Kafka plugin: %s", self.name)
 
         if self.runner:
@@ -101,7 +123,12 @@ class KafkaPlugin(BasePlugin):
             await self.producer.stop()
 
     def setup_commands(self, app: Application):
-        """Setup management commands for the plugin."""
+        """Register ``kafka-healthcheck`` and ``kafka-listen`` unless ``setup_commands`` is off.
+
+        ``kafka-healthcheck`` does not use the app lifespan, ``kafka-listen`` does,
+        so the plugin (and its automatic ``listen``) starts before the command
+        body runs.
+        """
         if not self.cfg.setup_commands:
             return
 
@@ -109,7 +136,7 @@ class KafkaPlugin(BasePlugin):
         async def healthcheck(*only: str, max_lag=1000):
             """Run Kafka healthcheck.
 
-            param topics: Optional list of topics to check.
+            param only: Optional list of topics to check (defaults to registered handlers).
             param max_lag: Maximum allowed lag for healthcheck.
             """
             topics_to_listen = only or self.handlers.get_topics()
@@ -129,7 +156,10 @@ class KafkaPlugin(BasePlugin):
         ):
             """Start listening to Kafka topics.
 
-            If no topics are specified, all topics with registered handlers will be listened to.
+            param topics: Topics to listen (defaults to all registered handlers).
+            param group_id: Override the consumer group ID for this run.
+            param monitor: Start the consumer monitor log task (use --no-monitor to disable).
+            param batch_size: Read messages in batches of this size (0 keeps single mode).
             """
             # If the plugin is not started yet, we need to start it before listening
             await self.listen(
@@ -145,7 +175,7 @@ class KafkaPlugin(BasePlugin):
             await self.runner
 
     def setup_pool(self):
-        """Setup the consumer pool with Kafka connection parameters."""
+        """Pass the consumer options from ``cfg`` to ``consumer_pool.setup()``."""
         cfg = self.cfg
         consumer_params = self.get_common_params()
         consumer_params.setdefault("max_poll_records", cfg.max_poll_records)
@@ -155,8 +185,11 @@ class KafkaPlugin(BasePlugin):
         self.consumer_pool.setup(**consumer_params)
 
     def get_common_params(self, **params: Any) -> dict[str, Any]:
-        """Get Kafka connection parameters by merging plugin configuration
-        with provided parameters."""
+        """Build ``AIOKafka`` connection options from the plugin configuration.
+
+        ``params`` are merged over the configured values. ``ssl_cafile`` becomes
+        an ``ssl_context``, which is what aiokafka expects.
+        """
         cfg = self.cfg
         kafka_params = dict(
             {
@@ -184,9 +217,18 @@ class KafkaPlugin(BasePlugin):
         context: Callable[[], AbstractAsyncContextManager] | None = None,
         **params: Any,
     ):
-        """Start listening to Kafka topics.
+        """Start consuming messages from ``only`` topics (all registered topics if empty).
 
-        If no topics are specified, all topics with registered handlers will be listened to.
+        Creates one consumer per topic (``consumer_pool.init``) and starts a
+        ``BatchPoolRunner`` when ``batch_size`` (argument or ``cfg.batch_size``)
+        is set, a ``SinglePoolRunner`` otherwise. ``monitor=None`` falls back to
+        ``cfg.monitor``; the interval is always ``cfg.monitor_interval``.
+        ``context`` is a callable returning an async context manager wrapped
+        around each per-consumer loop; ``**params`` go to ``AIOKafkaConsumer``.
+
+        Consumers are started here, so calling this twice for the same topics
+        starts them twice, which aiokafka rejects. Use one entry point per
+        process (see the README on ``listen=True`` and ``kafka-listen``).
         """
         topics_to_listen = only or self.handlers.get_topics()
         self.consumer_pool.init(*topics_to_listen, **params)
@@ -210,7 +252,15 @@ class KafkaPlugin(BasePlugin):
         await self.runner.start(monitor_interval, context=context)
 
     async def send(self, topic: str, value: Any, key=None, **params):
-        """Send a value to Kafka topic."""
+        """Encode and publish a message, returning aiokafka's delivery future.
+
+        ``str`` values are UTF-8 encoded, ``bytes`` are sent as is, anything else
+        is JSON-encoded; a truthy ``str`` key is UTF-8 encoded. Extra ``params``
+        go to ``AIOKafkaProducer.send()`` (``partition``, ``headers``, ...).
+        Awaiting this method only queues the message, await the returned future
+        to wait for delivery. Raises ``PluginError`` when ``produce`` is disabled
+        or the producer was not started.
+        """
         if not self.cfg.produce:
             raise PluginError("Kafka: Producer is not enabled")
 
@@ -226,7 +276,11 @@ class KafkaPlugin(BasePlugin):
         return await self.producer.send(topic, value, key=key, **params)
 
     def handle_topics(self, *topics: str) -> Callable[[TCallable], TCallable]:
-        """Register a handler for Kafka messages."""
+        """Decorator: call ``fn`` for every message of ``topics``.
+
+        Several handlers may be registered for one topic. They run sequentially
+        in registration order, and a failure in one does not skip the rest.
+        """
 
         def wrapper(fn):
             self.handlers.set_handler(fn, *topics)
@@ -235,14 +289,19 @@ class KafkaPlugin(BasePlugin):
         return wrapper
 
     def handle_error(self, fn: TErrCallable) -> TErrCallable:
-        """Register a handler for Kafka errors."""
+        """Decorator: register the single global error handler.
+
+        It receives the exception raised by a topic handler. An exception raised
+        by the error handler itself escapes into the consumer loop and stops that
+        consumer task.
+        """
 
         self.handlers.set_error_handler(fn)
         return fn
 
     @asynccontextmanager
     async def conftest(self):
-        """Disable actual Kafka broker connections during tests."""
+        """Patch producer/consumer ``start``/``stop`` so tests need no broker."""
 
         async def _noop(self):
             pass
