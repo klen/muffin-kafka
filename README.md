@@ -289,37 +289,44 @@ muffin example kafka-healthcheck                         # registered topics, ma
 muffin example kafka-healthcheck events.user --max-lag=500
 ```
 
-The command starts a temporary consumer pool when the plugin is not consuming in this
-process (`init(topics)` then `start()`), runs the check and stops that pool with
-`commit=False`. The plugin's own pool is left untouched, so the command can run
-repeatedly. When the plugin is already consuming in this process, the running pool is
-reused and left running.
+The command checks the topics given as arguments (or all topics with registered
+handlers) without joining the consumer group. It reads the group's committed offsets
+with `AIOKafkaAdminClient.list_consumer_group_offsets(group_id)` and the broker's end
+offsets with a separate `AIOKafkaConsumer` that is created with no topics and no
+`group_id`, so it never subscribes and never triggers a rebalance. All partitions of
+every checked topic are inspected, not just the partitions assigned to a consumer in
+this process.
 
-The check reads the latest offset (`end_offsets`) and the committed offset of every
-partition assigned to a started consumer and compares `end_offset - committed` with
-`max_lag`. A missing committed offset counts as `0`, and the comparison is strict, so a
-partition is unhealthy only when `lag > max_lag`. The command exits with `1` when at least
-one partition is unhealthy and also when the check could not be performed at all: no
-consumer has an assigned partition (nothing to inspect). A successful check exits with
+The check compares `end_offset - committed_offset` with `max_lag` for every partition.
+A partition with no committed offset is reported as `uncommitted` and, by default,
+marks the check unhealthy (`require_committed=True`); set `require_committed=False` to
+explicitly treat a missing commit as offset `0`. The comparison is strict, so a
+partition is unhealthy only when `lag > max_lag`.
+
+One pass is bounded by `asyncio.timeout`, defaulting to `request_timeout_ms / 1000`
+(30 s), and retriable aiokafka errors (for example `NodeNotReadyError`) are retried
+with `retry_backoff_ms` instead of failing the probe. The command exits with `1` when
+the check could not be performed or when at least one partition is unhealthy, and the
+error message names the failed partitions and topics. A successful check exits with
 `0`.
 
-`ConsumerPoolHealthcheck.process()` returns whether anything was inspected, so code that
-runs the check itself has to test both results:
+`ConsumerPoolHealthcheck.process()` returns a `ConsumerHealthcheckResult` with
+`performed`, `healthy`, `failed`, `uncommitted` and `errors`, so code that runs the
+check itself can report exactly what failed:
 
 ```python
 from muffin_kafka.consumers import ConsumerPoolHealthcheck
 
 async def kafka_is_healthy(max_lag: int = 1000) -> bool:
     healthcheck = ConsumerPoolHealthcheck(kafka.consumer_pool, max_lag=max_lag)
-    performed = await healthcheck.process()
-    return performed and bool(healthcheck)
+    result = await healthcheck.process()
+    return result.performed and result.healthy
 ```
 
-Keep in mind that the healthcheck consumer joins the configured `group_id`: running the
-command from a separate process triggers a group rebalance and only inspects the
-partitions assigned to that temporary consumer. Partitions handled by other group members
-are not examined. A check where no consumer got an assignment at all (for example while a
-rebalance is in progress) counts as failed, not as healthy.
+The probe creates its own admin client and consumer and closes them before returning,
+so it can be run repeatedly and never moves the group's offsets:
+`enable_auto_commit` is forced off and `auto_offset_reset` is set to `latest` on the
+probe consumer.
 
 ## Monitoring
 
@@ -458,7 +465,8 @@ Import from `muffin_kafka.consumers`:
 | `ConsumerHandlers` | Topic → handlers mapping used by the runners. |
 | `ConsumerPoolMonitor` | Base monitor: `process()` returns whether any assigned partition was inspected, via `process_consumer()` and `process_tp()`. |
 | `ConsumerPoolLogger` | Monitor that logs offsets, lag and poll delay; `__call__(interval)` is the loop task. |
-| `ConsumerPoolHealthcheck` | Monitor that sets `is_healthy = False` when `lag > max_lag`; `process()` returns `False` when nothing could be checked, so test both. |
+| `ConsumerPoolHealthcheck` | Group-less lag probe: committed offsets via `AIOKafkaAdminClient`, end offsets via a no-topics/no-group consumer, so it never joins the group. `process()` returns a `ConsumerHealthcheckResult`; `require_committed=True` makes a missing commit unhealthy. |
+| `ConsumerHealthcheckResult` | Result of one healthcheck pass: `performed`, `healthy`, `failed`, `uncommitted`, `errors`. |
 | `safe_commit(consumer)` | `consumer.commit()` that ignores `CommitFailedError` after a rebalance. |
 
 `PoolRunner` is also the extension point for a different fetching strategy: subclass it,
@@ -481,16 +489,19 @@ stops the task.
 - A failed record does not stop the consumer, but it is not retried per message: the next
   successful commit on that partition moves past it. Treat handler failures as dropped
   unless the process stops first.
-- Connection and group errors (`RebalanceInProgressError`, `KafkaConnectionError`, ...) in
-  the consume loop are logged and retried after one second. Any other crash is logged by
-  `PoolRunner` and never restarted: other topics keep consuming and `kafka-listen` exits
-  when the runner's tasks finish or raise.
+- Connection and group errors (`RebalanceInProgressError`, `KafkaConnectionError`,
+  `NodeNotReadyError`, ...) in the consume loop are logged and retried after one second.
+  Any other crash is logged by `PoolRunner` and never restarted: other topics keep
+  consuming and `kafka-listen` exits when the runner's tasks finish or raise.
 - `stop()` cancels the loops before doing anything else: a handler still running at
   shutdown is interrupted and its record is delivered again on restart, so shutdown can
   duplicate work but never skips it. Do not count on `stop()` to commit.
-- `kafka-healthcheck` joins the configured consumer group, so it triggers a rebalance and
-  only inspects the partitions assigned to that temporary consumer. A pool without any
-  assigned partition is reported as a failed check (exit code 1).
+- `kafka-healthcheck` reads committed offsets with an admin client and end offsets with a
+  group-less consumer, so it does not join the configured consumer group and does not
+  trigger a rebalance. It checks every partition of the requested topics, not just the
+  partitions assigned to a consumer in this process.
+- The healthcheck probe forces `enable_auto_commit=False` and `auto_offset_reset=latest`,
+  so it cannot move the group's offsets backwards.
 - The built-in monitor is the only configurable one; custom monitors must be instantiated
   and scheduled manually.
 - `max_poll_records` does not limit reads in this plugin; use `batch_size`.

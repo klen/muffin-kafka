@@ -2,6 +2,7 @@
 
 from muffin_kafka.consumers.handlers import ConsumerHandlers, TCallable, TErrCallable
 from muffin_kafka.consumers.monitors import (
+    ConsumerHealthcheckResult,
     ConsumerPoolHealthcheck,
     ConsumerPoolLogger,
     ConsumerPoolMonitor,
@@ -11,6 +12,7 @@ from muffin_kafka.consumers.utils import safe_commit
 
 __all__ = [
     "ConsumerHandlers",
+    "ConsumerHealthcheckResult",
     "ConsumerPool",
     "ConsumerPoolHealthcheck",
     "ConsumerPoolLogger",

@@ -1,17 +1,41 @@
 """Observers that periodically read consumer offsets for logging or health checks."""
 
 import abc
+import asyncio
 import dataclasses as dc
 from asyncio import sleep
+from collections.abc import Awaitable, Callable
 from time import time
 from typing import Any
 
+from aiokafka.admin import AIOKafkaAdminClient
 from aiokafka.consumer.consumer import AIOKafkaConsumer
 from aiokafka.errors import KafkaError
 from aiokafka.structs import TopicPartition
 
 from muffin_kafka import logger
 from muffin_kafka.consumers.pool import ConsumerPool
+
+# ``AIOKafkaAdminClient`` accepts only these connection options; the pool
+# ``params`` also carry consumer-only options (``group_id``, ``enable_auto_commit``, ...).
+_ADMIN_PARAMS = frozenset(
+    {
+        "bootstrap_servers",
+        "client_id",
+        "connections_max_idle_ms",
+        "metadata_max_age_ms",
+        "request_timeout_ms",
+        "retry_backoff_ms",
+        "sasl_kerberos_domain_name",
+        "sasl_kerberos_service_name",
+        "sasl_mechanism",
+        "sasl_oauth_token_provider",
+        "sasl_plain_password",
+        "sasl_plain_username",
+        "security_protocol",
+        "ssl_context",
+    }
+)
 
 
 @dc.dataclass
@@ -136,41 +160,260 @@ class ConsumerPoolLogger(ConsumerPoolMonitor):
 
 
 @dc.dataclass
-class ConsumerPoolHealthcheck(ConsumerPoolMonitor):
-    """Mark the pool unhealthy when a partition lag exceeds ``max_lag``.
+class ConsumerHealthcheckResult:
+    """Outcome of one ``ConsumerPoolHealthcheck.process()`` pass.
 
-    Lag is ``end_offset - committed``, with a missing committed offset counting
-    as 0, and the comparison is strict (``lag > max_lag``). ``is_healthy`` starts
-    as true and is never reset, so a check that did not run (``process()``
-    returned ``False``) must be treated as a failure by the caller, not as a
-    healthy result: truth-test the instance only after ``process()`` returned
-    ``True``.
+    ``performed`` is true when the probe reached a verdict (both offsets were
+    fetched); ``healthy`` is false when any partition is lagging, uncommitted
+    (with ``require_committed``) or could not be inspected. ``failed`` and
+    ``uncommitted`` name the unhealthy partitions; ``errors`` carries
+    per-topic/per-pass failures that cannot be attached to a partition.
     """
 
+    performed: bool = False
+    healthy: bool = True
+    failed: list[TopicPartition] = dc.field(default_factory=list)
+    uncommitted: list[TopicPartition] = dc.field(default_factory=list)
+    errors: list[str] = dc.field(default_factory=list)
+
+    def __str__(self) -> str:
+        """Return a human-readable summary for the healthcheck command log."""
+        problems: list[str] = []
+        if self.failed:
+            problems.append(
+                "failed partitions: "
+                + ", ".join(sorted(f"{tp.topic}-{tp.partition}" for tp in self.failed)),
+            )
+        if self.uncommitted:
+            problems.append(
+                "uncommitted partitions: "
+                + ", ".join(sorted(f"{tp.topic}-{tp.partition}" for tp in self.uncommitted)),
+            )
+        if self.errors:
+            problems.append("; ".join(self.errors))
+        return "; ".join(problems)
+
+
+@dc.dataclass
+class ConsumerPoolHealthcheck:
+    """Check consumer group lag without joining the consumer group.
+
+    Committed offsets are read with ``AIOKafkaAdminClient`` and end offsets with
+    a separate ``AIOKafkaConsumer`` created with no topics and no ``group_id``,
+    so the probe never subscribes or triggers a rebalance. ``process()`` returns
+    a :class:`ConsumerHealthcheckResult`; the instance itself stays truthy only
+    while the last pass was healthy.
+    """
+
+    pool: ConsumerPool
     max_lag: int = 100
+    require_committed: bool = True
+    timeout: float = 30.0
+    retry_backoff_ms: int = 1000
+    topics: tuple[str, ...] | None = None
     is_healthy: bool = True
 
-    async def process_tp(self, consumer: AIOKafkaConsumer, tp: TopicPartition, end_offset: int):
-        """Update ``is_healthy`` for one partition and log its lag.
+    async def process(self) -> ConsumerHealthcheckResult:
+        """Run one pass and return its explicit result.
 
-        A partition that cannot be read is logged and marks the pool unhealthy.
+        The whole pass is bounded by ``asyncio.timeout``; retriable
+        ``KafkaError``s are retried with ``retry_backoff_ms`` instead of being
+        reported as "not performed".
         """
-        try:
-            committed = await consumer.committed(tp) or 0
-        except KafkaError as exc:
-            logger.warning("[Healthcheck] Failed to fetch committed offset for %s: %s", tp, exc)
+        result = ConsumerHealthcheckResult()
+        topics = tuple(self.topics) if self.topics is not None else tuple(self.pool.topics)
+        if not topics:
+            result.errors.append("no topics to check")
+            result.healthy = False
             self.is_healthy = False
-            return
+            return result
 
-        lag = end_offset - committed
-        logger.info(
-            f"[Healthcheck] {tp.topic}-{tp.partition} | committed: {committed} | end: {end_offset} | lag: {lag}",  # noqa: E501
-        )
-        if lag > self.max_lag:
-            logger.warning(
-                f"Consumer has lag {lag} on topic {tp.topic} partition {tp.partition}",
-            )
+        group_id = self.pool.group_id
+        if not group_id:
+            result.errors.append("consumer group_id is not configured")
+            result.healthy = False
             self.is_healthy = False
+            return result
+
+        admin = AIOKafkaAdminClient(**self._admin_params())
+        fetched = await self._collect(admin, group_id, topics, result)
+        await self._close_admin(admin)
+        if fetched is None:
+            self.is_healthy = result.healthy
+            return result
+
+        committed, end_offsets, partitions = fetched
+        self._evaluate(committed, end_offsets, partitions, result)
+        self.is_healthy = result.healthy
+        return result
+
+    async def _collect(
+        self,
+        admin: AIOKafkaAdminClient,
+        group_id: str,
+        topics: tuple[str, ...],
+        result: ConsumerHealthcheckResult,
+    ) -> tuple[dict[TopicPartition, Any], dict[TopicPartition, int], list[TopicPartition]] | None:
+        """Fetch committed and end offsets; return ``None`` when the pass fails."""
+        consumer = None
+        try:
+            async with asyncio.timeout(self.timeout):
+                await admin.start()
+                committed = await self._retry(
+                    lambda: admin.list_consumer_group_offsets(group_id),
+                    "list consumer group offsets",
+                )
+
+                consumer = self._make_consumer()
+                await consumer.start()
+                await self._refresh_metadata(consumer, topics)
+                partitions, missing = self._collect_partitions(consumer, topics)
+                if missing:
+                    result.healthy = False
+                    result.errors.extend(
+                        f"topic {topic!r} has no partitions or is unknown" for topic in missing
+                    )
+
+                end_offsets: dict[TopicPartition, int] = {}
+                if partitions:
+                    end_offsets = await self._retry(
+                        lambda: consumer.end_offsets(partitions),
+                        "fetch end offsets",
+                    )
+                return committed, end_offsets, partitions
+        except TimeoutError:
+            result.errors.append(f"timed out after {self.timeout}s")
+            result.healthy = False
+            return None
+        except KafkaError as exc:
+            result.errors.append(str(exc))
+            result.healthy = False
+            return None
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("[Healthcheck] Healthcheck pass failed")
+            result.errors.append(str(exc))
+            result.healthy = False
+            return None
+        finally:
+            if consumer is not None:
+                await self._stop_consumer(consumer)
+
+    def _evaluate(
+        self,
+        committed: dict[TopicPartition, Any],
+        end_offsets: dict[TopicPartition, int],
+        partitions: list[TopicPartition],
+        result: ConsumerHealthcheckResult,
+    ) -> None:
+        """Compare committed and end offsets and fill ``result``."""
+        result.performed = True
+        for tp in partitions:
+            end = end_offsets.get(tp)
+            if end is None:
+                result.errors.append(f"{tp} is missing from end offsets")
+                result.failed.append(tp)
+                result.healthy = False
+                logger.error("[Healthcheck] Missing end offset for %s", tp)
+                continue
+
+            offset = committed.get(tp)
+            committed_offset = offset.offset if offset is not None else None
+            if committed_offset is None or committed_offset < 0:
+                result.uncommitted.append(tp)
+                logger.info("[Healthcheck] %s has no committed offset", tp)
+                if self.require_committed:
+                    result.failed.append(tp)
+                    result.healthy = False
+                    continue
+                committed_offset = 0
+
+            lag = end - committed_offset
+            logger.info(
+                "[Healthcheck] %s-%s | committed: %s | end: %s | lag: %s",
+                tp.topic,
+                tp.partition,
+                committed_offset,
+                end,
+                lag,
+            )
+            if lag > self.max_lag:
+                result.failed.append(tp)
+                result.healthy = False
+                logger.warning(
+                    "Consumer has lag %s on topic %s partition %s",
+                    lag,
+                    tp.topic,
+                    tp.partition,
+                )
+
+    def _admin_params(self) -> dict[str, Any]:
+        """Return the pool options ``AIOKafkaAdminClient`` accepts."""
+        return {key: value for key, value in self.pool.params.items() if key in _ADMIN_PARAMS}
+
+    def _make_consumer(self) -> AIOKafkaConsumer:
+        """Build a group-less, never-subscribing probe consumer."""
+        params = {
+            key: value
+            for key, value in self.pool.params.items()
+            if key not in {"group_id", "enable_auto_commit", "auto_offset_reset"}
+        }
+        params["enable_auto_commit"] = False
+        params["auto_offset_reset"] = "latest"
+        return AIOKafkaConsumer(**params)
+
+    async def _refresh_metadata(self, consumer: AIOKafkaConsumer, topics: tuple[str, ...]) -> None:
+        """Load partition metadata for ``topics`` without subscribing."""
+        # shortcut: aiokafka has no public metadata refresh on the consumer,
+        # use the client's private API until it exposes one.
+        client = consumer._client
+        client.set_topics(list(topics))
+        await client.force_metadata_update()
+
+    def _collect_partitions(
+        self,
+        consumer: AIOKafkaConsumer,
+        topics: tuple[str, ...],
+    ) -> tuple[list[TopicPartition], list[str]]:
+        """Return every partition of ``topics`` and the topics without metadata."""
+        partitions: list[TopicPartition] = []
+        missing: list[str] = []
+        for topic in topics:
+            ids = consumer.partitions_for_topic(topic)
+            if not ids:
+                missing.append(topic)
+                continue
+            partitions.extend(TopicPartition(topic, partition) for partition in sorted(ids))
+        return partitions, missing
+
+    async def _retry(self, operation: Callable[[], Awaitable[Any]], what: str) -> Any:
+        """Retry ``operation`` on retriable Kafka errors until the pass times out."""
+        while True:
+            try:
+                return await operation()
+            except KafkaError as exc:
+                if not exc.retriable:
+                    raise
+                logger.warning(
+                    "[Healthcheck] %s failed: %s; retrying in %s ms",
+                    what,
+                    exc,
+                    self.retry_backoff_ms,
+                )
+                await asyncio.sleep(self.retry_backoff_ms / 1000)
+
+    async def _stop_consumer(self, consumer: AIOKafkaConsumer) -> None:
+        """Stop the probe consumer; a close failure must not mask the result."""
+        try:
+            await consumer.stop()
+        except Exception:  # noqa: BLE001
+            logger.exception("[Healthcheck] Failed to stop probe consumer")
+
+    async def _close_admin(self, admin: AIOKafkaAdminClient) -> None:
+        """Close the admin client; a close failure must not mask the result."""
+        try:
+            await admin.close()
+        except Exception:  # noqa: BLE001
+            logger.exception("[Healthcheck] Failed to close admin client")
 
     def __bool__(self):
         """Return ``is_healthy`` so ``if healthcheck:`` reads naturally."""

@@ -13,6 +13,7 @@ from aiokafka.errors import (
     IllegalStateError,
     KafkaConnectionError,
     KafkaTimeoutError,
+    NodeNotReadyError,
     RebalanceInProgressError,
     UnknownMemberIdError,
 )
@@ -28,6 +29,7 @@ from muffin_kafka.consumers.handlers import ConsumerHandlers
 RETRY_ERRORS = (
     KafkaConnectionError,
     KafkaTimeoutError,
+    NodeNotReadyError,
     RebalanceInProgressError,
     UnknownMemberIdError,
     IllegalGenerationError,

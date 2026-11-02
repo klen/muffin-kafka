@@ -142,30 +142,25 @@ class KafkaPlugin(BasePlugin):
             param only: Optional list of topics to check (defaults to registered handlers).
             param max_lag: Maximum allowed lag for healthcheck.
 
-            Starts the consumers when the pool is not running yet (a separate pool,
-            so the plugin's own consumers are untouched) and stops them afterwards
-            with ``commit=False``; a running pool is reused. Exits with status 1
-            when the check cannot be performed (no assigned partitions) or when any
-            partition lag exceeds ``max_lag``.
+            Reads committed offsets with an admin client and end offsets with a
+            group-less probe consumer, so it never joins the consumer group or
+            disturbs the running consumers. Exits with status 1 when the check
+            cannot be performed or any partition is unhealthy.
             """
-            topics_to_listen = only or self.handlers.get_topics()
-            pool = self.consumer_pool
-            started_here = not pool.is_started
-            if started_here:
-                pool = ConsumerPool()
-                pool.setup(self.consumer_pool.group_id, **self.consumer_pool.params)
-                pool.init(*topics_to_listen)
-                await pool.start()
-
-            try:
-                checker = ConsumerPoolHealthcheck(pool, max_lag=max_lag)
-                performed = await checker.process()
-            finally:
-                if started_here:
-                    await pool.stop(commit=False)
-
-            if not performed or not checker:
-                app.logger.error("Kafka healthcheck failed")
+            checker = ConsumerPoolHealthcheck(
+                self.consumer_pool,
+                topics=tuple(only or self.handlers.get_topics()),
+                max_lag=max_lag,
+                require_committed=True,
+                timeout=self.cfg.request_timeout_ms / 1000,
+                retry_backoff_ms=self.cfg.retry_backoff_ms,
+            )
+            result = await checker.process()
+            if not result.performed:
+                app.logger.error("Kafka healthcheck could not be performed: %s", result)
+                raise SystemExit(1)
+            if not checker:
+                app.logger.error("Kafka healthcheck failed: %s", result)
                 raise SystemExit(1)
 
         @app.manage(name=f"{self.name}-listen", lifespan=True)

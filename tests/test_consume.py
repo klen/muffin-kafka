@@ -3,7 +3,12 @@ from asyncio import Future
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from aiokafka.errors import CommitFailedError, ConsumerStoppedError, IllegalOperation
+from aiokafka.errors import (
+    CommitFailedError,
+    ConsumerStoppedError,
+    IllegalOperation,
+    NodeNotReadyError,
+)
 
 from muffin_kafka.consumers import ConsumerHandlers, ConsumerPool
 from muffin_kafka.consumers.runner import BatchPoolRunner, PoolRunner, SinglePoolRunner
@@ -761,3 +766,30 @@ class TestConsumerPoolStop:
 
         mock_consumer.stop.assert_awaited_once()
         assert pool.is_started is False
+
+
+async def test_runner_retries_node_not_ready_error(kafka: KafkaPlugin):
+    calls = []
+
+    @kafka.handle_topics("events")
+    async def handler(message):
+        calls.append(message)
+
+    consumer = MagicMock()
+    consumer.getone = AsyncMock(
+        side_effect=[
+            NodeNotReadyError(),
+            MagicMock(topic="events"),
+            ConsumerStoppedError(),
+        ],
+    )
+    runner = PoolRunner(pool=ConsumerPool(), handlers=kafka.handlers)
+
+    with patch(
+        "muffin_kafka.consumers.runner.asyncio.sleep",
+        new=AsyncMock(),
+    ):
+        await runner.run_consumer(consumer)
+
+    assert len(calls) == 1
+    assert consumer.getone.await_count == 3
