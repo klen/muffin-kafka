@@ -136,11 +136,18 @@ class KafkaPlugin(BasePlugin):
             return
 
         @app.manage(name=f"{self.name}-healthcheck")
-        async def healthcheck(*only: str, max_lag=1000):
+        async def healthcheck(
+            *only: str,
+            max_lag=1000,
+            require_committed: bool = True,
+            timeout: float | None = None,  # noqa: ASYNC109
+        ):
             """Run Kafka healthcheck.
 
             param only: Optional list of topics to check (defaults to registered handlers).
             param max_lag: Maximum allowed lag for healthcheck.
+            param require_committed: Treat partitions without a committed offset as unhealthy.
+            param timeout: Maximum probe duration in seconds (defaults to request_timeout_ms).
 
             Reads committed offsets with an admin client and end offsets with a
             group-less probe consumer, so it never joins the consumer group or
@@ -151,8 +158,8 @@ class KafkaPlugin(BasePlugin):
                 self.consumer_pool,
                 topics=tuple(only or self.handlers.get_topics()),
                 max_lag=max_lag,
-                require_committed=True,
-                timeout=self.cfg.request_timeout_ms / 1000,
+                require_committed=require_committed,
+                timeout=self.cfg.request_timeout_ms / 1000 if timeout is None else float(timeout),
                 retry_backoff_ms=self.cfg.retry_backoff_ms,
             )
             result = await checker.process()

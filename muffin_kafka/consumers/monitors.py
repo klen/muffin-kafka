@@ -38,6 +38,19 @@ _ADMIN_PARAMS = frozenset(
 )
 
 
+def _admin_params(pool: ConsumerPool) -> dict[str, Any]:
+    """Return the pool options ``AIOKafkaAdminClient`` accepts."""
+    return {key: value for key, value in pool.params.items() if key in _ADMIN_PARAMS}
+
+
+async def _quiet(operation: Callable[[], Awaitable[Any]], error: str) -> None:
+    """Stop/close a client; a failing close must not mask the pass result."""
+    try:
+        await operation()
+    except Exception:  # noqa: BLE001
+        logger.exception(error)
+
+
 @dc.dataclass
 class ConsumerPoolMonitor(abc.ABC):
     """Base class for consumer pool observers.
@@ -120,6 +133,15 @@ class ConsumerPoolLogger(ConsumerPoolMonitor):
 
     interval: int
 
+    def __post_init__(self):
+        self._committed: dict[TopicPartition, int] = {}
+
+    async def process(self):
+        """Fetch committed offsets once, then run the per-partition pass."""
+        if self.pool.is_started:
+            await self._fetch_committed_offsets()
+        return await super().process()
+
     async def __call__(self, interval: int | None = None):
         """Process/sleep loop meant to run as a task; ``interval`` overrides ``self.interval``."""
         interval = self.interval if interval is None else interval
@@ -131,12 +153,35 @@ class ConsumerPoolLogger(ConsumerPoolMonitor):
                 logger.exception("[Kafka Monitor] Monitoring pass failed")
             await sleep(interval)
 
+    async def _fetch_committed_offsets(self):
+        """Read the group offsets once for the whole pool, with a timeout."""
+        self._committed = {}
+        group_id = self.pool.group_id
+        if not group_id:
+            return
+
+        admin = AIOKafkaAdminClient(**_admin_params(self.pool))
+        timeout = float(self.pool.params.get("request_timeout_ms") or 30000) / 1000
+        try:
+            async with asyncio.timeout(timeout):
+                await admin.start()
+                committed = await admin.list_consumer_group_offsets(group_id)
+            self._committed = {tp: meta.offset for tp, meta in committed.items()}
+        except TimeoutError:
+            logger.warning("[Kafka Monitor] Timed out fetching committed offsets")
+        except KafkaError as exc:
+            logger.warning("[Kafka Monitor] Failed to fetch committed offsets: %s", exc)
+        except Exception:  # noqa: BLE001
+            logger.exception("[Kafka Monitor] Failed to fetch committed offsets")
+        finally:
+            await _quiet(admin.close, "[Kafka Monitor] Failed to close admin client")
+
     async def process_tp(self, consumer: AIOKafkaConsumer, tp: TopicPartition, end_offset: int):
         """Log one line of metrics for a partition; read errors are logged and ignored."""
         now = int(time() * 1000)
         try:
             pos = await consumer.position(tp)
-            committed = await consumer.committed(tp) or 0
+            committed = self._committed.get(tp, 0)
             last_poll = consumer.last_poll_timestamp(tp)
             lag = end_offset - committed
             poll_delay = now - last_poll if last_poll else None
@@ -178,17 +223,12 @@ class ConsumerHealthcheckResult:
 
     def __str__(self) -> str:
         """Return a human-readable summary for the healthcheck command log."""
-        problems: list[str] = []
-        if self.failed:
-            problems.append(
-                "failed partitions: "
-                + ", ".join(sorted(f"{tp.topic}-{tp.partition}" for tp in self.failed)),
-            )
-        if self.uncommitted:
-            problems.append(
-                "uncommitted partitions: "
-                + ", ".join(sorted(f"{tp.topic}-{tp.partition}" for tp in self.uncommitted)),
-            )
+        problems = [
+            f"{name} partitions: "
+            + ", ".join(sorted(f"{tp.topic}-{tp.partition}" for tp in partitions))
+            for name, partitions in (("failed", self.failed), ("uncommitted", self.uncommitted))
+            if partitions
+        ]
         if self.errors:
             problems.append("; ".join(self.errors))
         return "; ".join(problems)
@@ -235,15 +275,11 @@ class ConsumerPoolHealthcheck:
             self.is_healthy = False
             return result
 
-        admin = AIOKafkaAdminClient(**self._admin_params())
+        admin = AIOKafkaAdminClient(**_admin_params(self.pool))
         fetched = await self._collect(admin, group_id, topics, result)
-        await self._close_admin(admin)
-        if fetched is None:
-            self.is_healthy = result.healthy
-            return result
-
-        committed, end_offsets, partitions = fetched
-        self._evaluate(committed, end_offsets, partitions, result)
+        await _quiet(admin.close, "[Healthcheck] Failed to close admin client")
+        if fetched is not None:
+            self._evaluate(*fetched, result)
         self.is_healthy = result.healthy
         return result
 
@@ -263,11 +299,7 @@ class ConsumerPoolHealthcheck:
                     lambda: admin.list_consumer_group_offsets(group_id),
                     "list consumer group offsets",
                 )
-
-                consumer = self._make_consumer()
-                await consumer.start()
-                await self._refresh_metadata(consumer, topics)
-                partitions, missing = self._collect_partitions(consumer, topics)
+                partitions, missing = await self._describe_partitions(admin, topics)
                 if missing:
                     result.healthy = False
                     result.errors.extend(
@@ -276,6 +308,9 @@ class ConsumerPoolHealthcheck:
 
                 end_offsets: dict[TopicPartition, int] = {}
                 if partitions:
+                    consumer = self._make_consumer()
+                    await consumer.start()
+                    consumer.assign(partitions)
                     end_offsets = await self._retry(
                         lambda: consumer.end_offsets(partitions),
                         "fetch end offsets",
@@ -296,7 +331,7 @@ class ConsumerPoolHealthcheck:
             return None
         finally:
             if consumer is not None:
-                await self._stop_consumer(consumer)
+                await _quiet(consumer.stop, "[Healthcheck] Failed to stop probe consumer")
 
     def _evaluate(
         self,
@@ -346,10 +381,6 @@ class ConsumerPoolHealthcheck:
                     tp.partition,
                 )
 
-    def _admin_params(self) -> dict[str, Any]:
-        """Return the pool options ``AIOKafkaAdminClient`` accepts."""
-        return {key: value for key, value in self.pool.params.items() if key in _ADMIN_PARAMS}
-
     def _make_consumer(self) -> AIOKafkaConsumer:
         """Build a group-less, never-subscribing probe consumer."""
         params = {
@@ -361,28 +392,27 @@ class ConsumerPoolHealthcheck:
         params["auto_offset_reset"] = "latest"
         return AIOKafkaConsumer(**params)
 
-    async def _refresh_metadata(self, consumer: AIOKafkaConsumer, topics: tuple[str, ...]) -> None:
-        """Load partition metadata for ``topics`` without subscribing."""
-        # shortcut: aiokafka has no public metadata refresh on the consumer,
-        # use the client's private API until it exposes one.
-        client = consumer._client
-        client.set_topics(list(topics))
-        await client.force_metadata_update()
-
-    def _collect_partitions(
+    async def _describe_partitions(
         self,
-        consumer: AIOKafkaConsumer,
+        admin: AIOKafkaAdminClient,
         topics: tuple[str, ...],
     ) -> tuple[list[TopicPartition], list[str]]:
         """Return every partition of ``topics`` and the topics without metadata."""
+        described = await self._retry(
+            lambda: admin.describe_topics(list(topics)),
+            "describe topics",
+        )
+        by_topic = {item["topic"]: item for item in described}
         partitions: list[TopicPartition] = []
         missing: list[str] = []
         for topic in topics:
-            ids = consumer.partitions_for_topic(topic)
-            if not ids:
+            info = by_topic.get(topic)
+            if not info or info.get("error_code") or not info.get("partitions"):
                 missing.append(topic)
                 continue
-            partitions.extend(TopicPartition(topic, partition) for partition in sorted(ids))
+            partitions.extend(
+                TopicPartition(topic, item["partition"]) for item in info["partitions"]
+            )
         return partitions, missing
 
     async def _retry(self, operation: Callable[[], Awaitable[Any]], what: str) -> Any:
@@ -400,20 +430,6 @@ class ConsumerPoolHealthcheck:
                     self.retry_backoff_ms,
                 )
                 await asyncio.sleep(self.retry_backoff_ms / 1000)
-
-    async def _stop_consumer(self, consumer: AIOKafkaConsumer) -> None:
-        """Stop the probe consumer; a close failure must not mask the result."""
-        try:
-            await consumer.stop()
-        except Exception:  # noqa: BLE001
-            logger.exception("[Healthcheck] Failed to stop probe consumer")
-
-    async def _close_admin(self, admin: AIOKafkaAdminClient) -> None:
-        """Close the admin client; a close failure must not mask the result."""
-        try:
-            await admin.close()
-        except Exception:  # noqa: BLE001
-            logger.exception("[Healthcheck] Failed to close admin client")
 
     def __bool__(self):
         """Return ``is_healthy`` so ``if healthcheck:`` reads naturally."""

@@ -287,11 +287,20 @@ command starts an empty runner and exits immediately.
 ```bash
 muffin example kafka-healthcheck                         # registered topics, max lag 1000
 muffin example kafka-healthcheck events.user --max-lag=500
+muffin example kafka-healthcheck events.user --no-require-committed
+muffin example kafka-healthcheck events.user --timeout=10
 ```
 
+CLI options: `--max-lag`, `--no-require-committed` (treat a missing committed offset
+as `0` instead of unhealthy) and `--timeout` (probe timeout in seconds, default
+`request_timeout_ms / 1000`, i.e. 30 s). A Kubernetes `timeoutSeconds` must be greater
+than the probe timeout, otherwise the orchestrator cuts the command off before it can
+report its own timeout.
+
 The command checks the topics given as arguments (or all topics with registered
-handlers) without joining the consumer group. It reads the group's committed offsets
-with `AIOKafkaAdminClient.list_consumer_group_offsets(group_id)` and the broker's end
+handlers) without joining the consumer group. It discovers the topic partitions with
+`AIOKafkaAdminClient.describe_topics`, reads the group's committed offsets with
+`AIOKafkaAdminClient.list_consumer_group_offsets(group_id)` and the broker's end
 offsets with a separate `AIOKafkaConsumer` that is created with no topics and no
 `group_id`, so it never subscribes and never triggers a rebalance. All partitions of
 every checked topic are inspected, not just the partitions assigned to a consumer in
@@ -342,6 +351,12 @@ seconds it logs one line per assigned partition:
 - `committed` — last offset committed for the group.
 - `end` — latest offset on the broker.
 - `lag` — `end - committed`.
+
+Committed offsets are fetched once per pass with
+`AIOKafkaAdminClient.list_consumer_group_offsets` (bounded by `request_timeout_ms`)
+instead of one `consumer.committed()` call per partition, so a monitor pass cannot
+hang on per-partition offset fetches. If the pool has no `group_id`, committed offsets
+are logged as `0`.
 - `poll_delay` — milliseconds since the consumer last polled that partition.
 
 `monitor_interval=0` (or any falsy value) disables the loop.
@@ -464,7 +479,7 @@ Import from `muffin_kafka.consumers`:
 | `SinglePoolRunner`, `BatchPoolRunner` | Aliases of `PoolRunner`, kept so existing imports work. |
 | `ConsumerHandlers` | Topic → handlers mapping used by the runners. |
 | `ConsumerPoolMonitor` | Base monitor: `process()` returns whether any assigned partition was inspected, via `process_consumer()` and `process_tp()`. |
-| `ConsumerPoolLogger` | Monitor that logs offsets, lag and poll delay; `__call__(interval)` is the loop task. |
+| `ConsumerPoolLogger` | Monitor that logs offsets, lag and poll delay; committed offsets are fetched once per pass via the admin client, `__call__(interval)` is the loop task. |
 | `ConsumerPoolHealthcheck` | Group-less lag probe: committed offsets via `AIOKafkaAdminClient`, end offsets via a no-topics/no-group consumer, so it never joins the group. `process()` returns a `ConsumerHealthcheckResult`; `require_committed=True` makes a missing commit unhealthy. |
 | `ConsumerHealthcheckResult` | Result of one healthcheck pass: `performed`, `healthy`, `failed`, `uncommitted`, `errors`. |
 | `safe_commit(consumer)` | `consumer.commit()` that ignores `CommitFailedError` after a rebalance. |

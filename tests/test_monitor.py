@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from aiokafka.errors import KafkaConnectionError
+from aiokafka.structs import OffsetAndMetadata, TopicPartition
 
 from muffin_kafka.consumers import ConsumerPool, ConsumerPoolLogger
 
@@ -54,7 +55,7 @@ class TestConsumerPoolLogger:
         mock_consumer.assignment.return_value = [tp]
         mock_consumer.end_offsets = AsyncMock(return_value={tp: 100})
         mock_consumer.position = AsyncMock(return_value=10)
-        mock_consumer.committed = AsyncMock(return_value=90)
+        monitor._committed = {tp: 90}
         mock_consumer.last_poll_timestamp.return_value = 1_000_000
 
         with patch("muffin_kafka.consumers.monitors.time", return_value=1000):
@@ -83,3 +84,33 @@ class TestConsumerPoolLogger:
         await monitor.process_consumer(mock_consumer)
 
         mock_consumer.end_offsets.assert_not_awaited()
+
+
+async def test_monitor_fetches_committed_offsets_in_one_request(mock_consumer):
+    tp = TopicPartition("events", 0)
+    mock_consumer.assignment.return_value = [tp]
+    mock_consumer.end_offsets = AsyncMock(return_value={tp: 100})
+    mock_consumer.position = AsyncMock(return_value=10)
+    mock_consumer.last_poll_timestamp.return_value = 1_000_000
+
+    pool = ConsumerPool()
+    pool.setup(group_id="group", bootstrap_servers="kafka:9092", request_timeout_ms=1000)
+    pool.consumers = [mock_consumer]
+    pool.is_started = True
+
+    admin = MagicMock()
+    admin.start = AsyncMock()
+    admin.list_consumer_group_offsets = AsyncMock(
+        return_value={tp: OffsetAndMetadata(90, "")},
+    )
+    admin.close = AsyncMock()
+
+    with patch(
+        "muffin_kafka.consumers.monitors.AIOKafkaAdminClient",
+        return_value=admin,
+    ):
+        monitor = ConsumerPoolLogger(interval=0, pool=pool)
+        assert await monitor.process() is True
+
+    admin.list_consumer_group_offsets.assert_awaited_once_with("group")
+    mock_consumer.committed.assert_not_awaited()
