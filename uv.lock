@@ -465,7 +465,7 @@ wheels = [
 
 [[package]]
 name = "muffin-kafka"
-version = "3.2.2"
+version = "3.3.0"
 source = { editable = "." }
 default-groups = "all"
 dependencies = [
