@@ -6,12 +6,12 @@ import dataclasses as dc
 from asyncio import sleep
 from collections.abc import Awaitable, Callable
 from time import time
-from typing import Any
+from typing import Any, TypeVar
 
 from aiokafka.admin import AIOKafkaAdminClient
 from aiokafka.consumer.consumer import AIOKafkaConsumer
 from aiokafka.errors import KafkaError
-from aiokafka.structs import TopicPartition
+from aiokafka.structs import OffsetAndMetadata, TopicPartition
 
 from muffin_kafka import logger
 from muffin_kafka.consumers.pool import ConsumerPool
@@ -37,13 +37,15 @@ _ADMIN_PARAMS = frozenset(
     }
 )
 
+T = TypeVar("T")
+
 
 def _admin_params(pool: ConsumerPool) -> dict[str, Any]:
     """Return the pool options ``AIOKafkaAdminClient`` accepts."""
     return {key: value for key, value in pool.params.items() if key in _ADMIN_PARAMS}
 
 
-async def _quiet(operation: Callable[[], Awaitable[Any]], error: str) -> None:
+async def _quiet(operation: Callable[[], Awaitable[object]], error: str) -> None:
     """Stop/close a client; a failing close must not mask the pass result."""
     try:
         await operation()
@@ -68,7 +70,7 @@ class ConsumerPoolMonitor(abc.ABC):
 
     pool: ConsumerPool
 
-    async def process(self):
+    async def process(self) -> bool:
         """Run one monitoring pass and report whether anything was inspected.
 
         Returns ``False`` when the pool is not started, when no consumer has an
@@ -133,16 +135,16 @@ class ConsumerPoolLogger(ConsumerPoolMonitor):
 
     interval: int
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self._committed: dict[TopicPartition, int] = {}
 
-    async def process(self):
+    async def process(self) -> bool:
         """Fetch committed offsets once, then run the per-partition pass."""
         if self.pool.is_started:
             await self._fetch_committed_offsets()
         return await super().process()
 
-    async def __call__(self, interval: int | None = None):
+    async def __call__(self, interval: int | None = None) -> None:
         """Process/sleep loop meant to run as a task; ``interval`` overrides ``self.interval``."""
         interval = self.interval if interval is None else interval
 
@@ -153,7 +155,7 @@ class ConsumerPoolLogger(ConsumerPoolMonitor):
                 logger.exception("[Kafka Monitor] Monitoring pass failed")
             await sleep(interval)
 
-    async def _fetch_committed_offsets(self):
+    async def _fetch_committed_offsets(self) -> None:
         """Read the group offsets once for the whole pool, with a timeout."""
         self._committed = {}
         group_id = self.pool.group_id
@@ -176,7 +178,9 @@ class ConsumerPoolLogger(ConsumerPoolMonitor):
         finally:
             await _quiet(admin.close, "[Kafka Monitor] Failed to close admin client")
 
-    async def process_tp(self, consumer: AIOKafkaConsumer, tp: TopicPartition, end_offset: int):
+    async def process_tp(
+        self, consumer: AIOKafkaConsumer, tp: TopicPartition, end_offset: int
+    ) -> None:
         """Log one line of metrics for a partition; read errors are logged and ignored."""
         now = int(time() * 1000)
         try:
@@ -289,7 +293,12 @@ class ConsumerPoolHealthcheck:
         group_id: str,
         topics: tuple[str, ...],
         result: ConsumerHealthcheckResult,
-    ) -> tuple[dict[TopicPartition, Any], dict[TopicPartition, int], list[TopicPartition]] | None:
+    ) -> (
+        tuple[
+            dict[TopicPartition, OffsetAndMetadata], dict[TopicPartition, int], list[TopicPartition]
+        ]
+        | None
+    ):
         """Fetch committed and end offsets; return ``None`` when the pass fails."""
         consumer = None
         try:
@@ -335,7 +344,7 @@ class ConsumerPoolHealthcheck:
 
     def _evaluate(
         self,
-        committed: dict[TopicPartition, Any],
+        committed: dict[TopicPartition, OffsetAndMetadata],
         end_offsets: dict[TopicPartition, int],
         partitions: list[TopicPartition],
         result: ConsumerHealthcheckResult,
@@ -415,7 +424,7 @@ class ConsumerPoolHealthcheck:
             )
         return partitions, missing
 
-    async def _retry(self, operation: Callable[[], Awaitable[Any]], what: str) -> Any:
+    async def _retry(self, operation: Callable[[], Awaitable[T]], what: str) -> T:
         """Retry ``operation`` on retriable Kafka errors until the pass times out."""
         while True:
             try:
@@ -431,6 +440,6 @@ class ConsumerPoolHealthcheck:
                 )
                 await asyncio.sleep(self.retry_backoff_ms / 1000)
 
-    def __bool__(self):
+    def __bool__(self) -> bool:
         """Return ``is_healthy`` so ``if healthcheck:`` reads naturally."""
         return self.is_healthy

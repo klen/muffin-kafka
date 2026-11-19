@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Mapping
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Mapping, Self
 from unittest import mock
 
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer, helpers
@@ -21,6 +21,8 @@ from muffin_kafka.consumers import (
 from muffin_kafka.consumers.runner import PoolRunner
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
     from muffin.app import Application
 
 
@@ -71,17 +73,17 @@ class KafkaPlugin(BasePlugin):
         app: Application | None = None,
         *,
         context: Callable[[], AbstractAsyncContextManager] | None = None,
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         self.runner: PoolRunner | None = None
         self.producer: AIOKafkaProducer | None = None
-        self.handlers = ConsumerHandlers()
-        self.consumer_pool = ConsumerPool()
-        self.context = context
+        self.handlers: ConsumerHandlers = ConsumerHandlers()
+        self.consumer_pool: ConsumerPool = ConsumerPool()
+        self.context: Callable[[], AbstractAsyncContextManager] | None = context
 
         super().__init__(app, **kwargs)
 
-    def setup(self, app: Application, **options) -> bool:
+    def setup(self, app: Application, **options: Any) -> bool:
         """Bind the app, register management commands and configure the consumer pool.
 
         Returns ``False`` without doing anything when the plugin is disabled.
@@ -94,7 +96,7 @@ class KafkaPlugin(BasePlugin):
 
         return True
 
-    async def startup(self):
+    async def startup(self) -> None:
         """Start the producer (``produce``) and the consumers (``listen``) with the app."""
         logger = self.app.logger
         logger.info("Kafka: Starting plugin: %s", self.name)
@@ -109,7 +111,7 @@ class KafkaPlugin(BasePlugin):
             logger.info("Kafka: Setup listeners")
             await self.listen()
 
-    async def shutdown(self):
+    async def shutdown(self) -> None:
         """Cancel the consumer tasks, then stop the producer.
 
         Offsets are not committed here: with ``enable_auto_commit=False`` the
@@ -125,7 +127,7 @@ class KafkaPlugin(BasePlugin):
         if self.producer:
             await self.producer.stop()
 
-    def setup_commands(self, app: Application):
+    def setup_commands(self, app: Application) -> None:
         """Register ``kafka-healthcheck`` and ``kafka-listen`` unless ``setup_commands`` is off.
 
         ``kafka-healthcheck`` starts the pool itself (or reuses a running one),
@@ -138,10 +140,10 @@ class KafkaPlugin(BasePlugin):
         @app.manage(name=f"{self.name}-healthcheck")
         async def healthcheck(
             *only: str,
-            max_lag=1000,
+            max_lag: int = 1000,
             require_committed: bool = True,
             timeout: float | None = None,  # noqa: ASYNC109
-        ):
+        ) -> None:
             """Run Kafka healthcheck.
 
             param only: Optional list of topics to check (defaults to registered handlers).
@@ -176,7 +178,7 @@ class KafkaPlugin(BasePlugin):
             group_id: str | None = None,
             monitor: bool = True,
             batch_size: int | str = 0,
-        ):
+        ) -> None:
             """Start listening to Kafka topics.
 
             param topics: Topics to listen (defaults to all registered handlers).
@@ -197,7 +199,7 @@ class KafkaPlugin(BasePlugin):
             assert self.runner
             await self.runner
 
-    def setup_pool(self):
+    def setup_pool(self) -> None:
         """Pass the consumer options from ``cfg`` to ``consumer_pool.setup()``."""
         cfg = self.cfg
         consumer_params = self.get_common_params()
@@ -275,7 +277,7 @@ class KafkaPlugin(BasePlugin):
         self.runner = runner
         return runner
 
-    async def send(self, topic: str, value: Any, key=None, **params):
+    async def send(self, topic: str, value: Any, key: Any = None, **params: Any) -> Any:
         """Encode and publish a message, returning aiokafka's delivery future.
 
         ``str`` values are UTF-8 encoded, ``bytes`` are sent as is, anything else
@@ -307,7 +309,7 @@ class KafkaPlugin(BasePlugin):
         in registration order, and a failure in one does not skip the rest.
         """
 
-        def wrapper(fn):
+        def wrapper(fn: TCallable) -> TCallable:
             self.handlers.set_handler(fn, *topics)
             return fn
 
@@ -325,10 +327,10 @@ class KafkaPlugin(BasePlugin):
         return fn
 
     @asynccontextmanager
-    async def conftest(self):
+    async def conftest(self) -> AsyncGenerator[Self, None]:
         """Patch producer/consumer ``start``/``stop`` so tests need no broker."""
 
-        async def _noop(self):
+        async def _noop(*_: Any, **__: Any) -> None:
             pass
 
         with (

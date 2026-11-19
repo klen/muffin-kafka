@@ -13,7 +13,7 @@ from aiokafka.structs import ConsumerRecord
 
 from muffin_kafka import logger
 
-TCallable = Callable[..., Awaitable[Any]]
+TCallable = Callable[[ConsumerRecord], Awaitable[Any]]
 TErrCallable = Callable[[BaseException], Awaitable[Any]]
 
 
@@ -27,7 +27,7 @@ class ConsumerHandlers:
     user code). ``error_handler`` is called for every handler exception.
     """
 
-    handlers: dict[str, list[TCallable]] = dc.field(
+    handlers: defaultdict[str, list[TCallable]] = dc.field(
         default_factory=lambda: defaultdict(list),
     )
     error_handler: TErrCallable | None = None
@@ -36,12 +36,12 @@ class ConsumerHandlers:
         """Return the set of topics that have at least one handler."""
         return set(self.handlers.keys())
 
-    def set_handler(self, handler: TCallable, *topics: str):
+    def set_handler(self, handler: TCallable, *topics: str) -> None:
         """Append ``handler`` to every topic in ``topics`` (order is kept)."""
         for topic in topics:
             self.handlers[topic].append(handler)
 
-    def set_error_handler(self, handler: TErrCallable):
+    def set_error_handler(self, handler: TErrCallable) -> None:
         """Set the single error handler, replacing any previous one."""
         self.error_handler = handler
 

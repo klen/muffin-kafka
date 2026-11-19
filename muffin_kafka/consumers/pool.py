@@ -2,6 +2,8 @@
 
 import asyncio
 import dataclasses as dc
+from collections.abc import Iterator
+from typing import Any
 
 from aiokafka.consumer.consumer import AIOKafkaConsumer
 
@@ -32,15 +34,15 @@ class ConsumerPool:
     consumers: list[AIOKafkaConsumer] = dc.field(default_factory=list)
     topics: set[str] = dc.field(default_factory=set)
     group_id: str | None = None
-    params: dict = dc.field(default_factory=dict)
+    params: dict[str, Any] = dc.field(default_factory=dict)
     is_started: bool = False
 
-    def setup(self, group_id: str | None, **params):
+    def setup(self, group_id: str | None, **params: Any) -> None:
         """Store the default consumer options and the fallback ``group_id``."""
         self.params = params
         self.group_id = group_id
 
-    def init(self, *topics: str, **params):
+    def init(self, *topics: str, **params: Any) -> None:
         """Create a consumer for every topic in ``topics`` that the pool does not cover.
 
         The consumers are created but not started. ``params`` are merged over the
@@ -49,7 +51,7 @@ class ConsumerPool:
         for topic in set(topics) - self.topics:
             self.consumers.append(self.init_consumer(topic, **params))
 
-    def init_consumer(self, *topics: str, **params) -> AIOKafkaConsumer:
+    def init_consumer(self, *topics: str, **params: Any) -> AIOKafkaConsumer:
         """Create an ``AIOKafkaConsumer`` for ``topics`` from the stored options.
 
         ``params`` win over the stored options; ``group_id`` falls back to the
@@ -61,7 +63,7 @@ class ConsumerPool:
         self.topics.update(topics)
         return consumer
 
-    async def start(self):
+    async def start(self) -> None:
         """Connect every consumer to the cluster and mark the pool as started.
 
         Idempotent: a pool that is already started is left untouched. A failure
@@ -75,7 +77,7 @@ class ConsumerPool:
                 tg.create_task(consumer.start())
         self.is_started = True
 
-    async def stop(self, *, commit: bool = True):
+    async def stop(self, *, commit: bool = True) -> None:
         """Commit offsets (unless ``commit=False``) and close every consumer.
 
         Commit failures are logged and never abort the shutdown; the consumers are
@@ -91,6 +93,6 @@ class ConsumerPool:
                 tg.create_task(consumer.stop())
         self.is_started = False
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[AIOKafkaConsumer]:
         """Iterate over the pool's consumers."""
         return iter(self.consumers)

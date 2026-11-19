@@ -4,7 +4,7 @@ import asyncio
 import dataclasses as dc
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, nullcontext
-from typing import Coroutine
+from typing import Any, Coroutine, Generator
 
 from aiokafka import AIOKafkaConsumer
 from aiokafka.errors import (
@@ -51,9 +51,9 @@ class PoolRunner:
     handlers: ConsumerHandlers
     enable_auto_commit: bool = True
     batch_size: int | None = None
-    tasks: list = dc.field(default_factory=list)
+    tasks: list[asyncio.Task[Any]] = dc.field(default_factory=list)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self._stop_event: asyncio.Event = asyncio.Event()
         self._context_factory: Callable[[], AbstractAsyncContextManager] = nullcontext
 
@@ -61,7 +61,7 @@ class PoolRunner:
         self,
         monitor: int | None = None,
         context: Callable[[], AbstractAsyncContextManager] | None = None,
-    ):
+    ) -> None:
         """Start the pool and spawn the consumer tasks.
 
         ``monitor`` is the interval in seconds of the built-in
@@ -82,7 +82,7 @@ class PoolRunner:
             pool_logger = ConsumerPoolLogger(pool=self.pool, interval=monitor)
             self.register_task(pool_logger())
 
-    async def stop(self, *, commit: bool = False):
+    async def stop(self, *, commit: bool = False) -> None:
         """Cancel the consumer tasks, then optionally commit and close the pool.
 
         The loops are cancelled first: a message that is still being handled is
@@ -99,13 +99,13 @@ class PoolRunner:
 
         await self.pool.stop(commit=commit)
 
-    def register_task(self, coro: Coroutine):
+    def register_task(self, coro: Coroutine[Any, Any, Any]) -> None:
         """Run ``coro`` as a task and log its exception instead of losing it."""
         task = create_task(coro)
         task.add_done_callback(self._handle_task_exception)
         self.tasks.append(task)
 
-    def _handle_task_exception(self, task):
+    def _handle_task_exception(self, task: asyncio.Task[Any]) -> None:
         """Log task crashes; normal stop and cancellation are expected."""
         if task.cancelled():
             return
@@ -116,12 +116,12 @@ class PoolRunner:
 
         logger.error("Kafka task crashed: %s", exc)
 
-    async def run_consumer(self, consumer):
+    async def run_consumer(self, consumer: AIOKafkaConsumer) -> None:
         """Run one consumer loop inside the configured context manager."""
         async with self._context_factory():
             await self._run_consumer(consumer)
 
-    async def _run_consumer(self, consumer: AIOKafkaConsumer):
+    async def _run_consumer(self, consumer: AIOKafkaConsumer) -> None:
         """Consume from ``consumer`` until the runner stops.
 
         With ``enable_auto_commit`` off the offset is committed only when every
@@ -157,7 +157,7 @@ class PoolRunner:
             if messages and success and not self.enable_auto_commit:
                 await safe_commit(consumer)
 
-    def __await__(self):
+    def __await__(self) -> Generator[Any, None, list[Any]]:
         """Wait for all runner tasks, keeping ``kafka-listen`` alive."""
         return asyncio.gather(*self.tasks).__await__()
 
